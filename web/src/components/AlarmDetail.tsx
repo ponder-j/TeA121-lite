@@ -1,0 +1,1 @@
+export { AlarmDetail } from '../App';

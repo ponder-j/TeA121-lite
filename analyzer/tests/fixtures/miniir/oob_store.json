@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "functions": [{"name": "oob_store", "entry": "entry", "blocks": [{"id": "entry", "instructions": [
+    {"id": "buf", "op": "alloca", "result": "buf", "count": 8, "element_size": 1},
+    {"id": "ptr", "op": "gep", "result": "ptr", "base": "buf", "index": 8, "element_size": 1},
+    {"id": "store", "op": "store", "pointer": "ptr", "width": 1}
+  ]}]}]
+}

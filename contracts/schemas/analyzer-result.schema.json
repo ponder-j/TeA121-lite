@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tea121.local/contracts/analyzer-result.schema.json",
+  "title": "tea121 analyzer result",
+  "type": "object",
+  "required": ["schema_version", "run_id", "analyzer_version", "detector_id", "rule_pack_id", "status", "summary", "alarms", "diagnostics", "cfg", "block_states", "trace"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "analyzer_version": {"type": "string"},
+    "detector_id": {"type": "string"}, "detector_version": {"type": "string"},
+    "rule_pack_id": {"type": "string"}, "rule_pack_version": {"type": "string"},
+    "status": {"enum": ["succeeded", "unsupported", "error"]},
+    "summary": {"type": "object", "required": ["alarm_count", "diagnostic_count", "unsupported_count", "error_count"], "properties": {"alarm_count": {"type": "integer", "minimum": 0}, "diagnostic_count": {"type": "integer", "minimum": 0}, "unsupported_count": {"type": "integer", "minimum": 0}, "error_count": {"type": "integer", "minimum": 0}}, "additionalProperties": true},
+    "inputs": {"type": "array"}, "config": {"type": "object"}, "artifacts": {"type": "array"}, "cfg": {"type": "array"}, "block_states": {"type": "array"}, "trace": {"type": "array"},
+    "alarms": {"type": "array", "items": {"$ref": "#/$defs/alarm"}},
+    "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
+  },
+  "$defs": {
+    "alarm": {
+      "type": "object", "required": ["alarm_key", "detector_id", "rule_pack_id", "cwe_id", "violation_kind", "severity", "memory_object_id", "object_size", "offset", "access_size", "reason"],
+      "properties": {"alarm_key": {"type": "string"}, "detector_id": {"type": "string"}, "rule_pack_id": {"type": "string"}, "cwe_id": {"type": "string"}, "family": {"type": ["string", "null"]}, "violation_kind": {"type": "string"}, "severity": {"enum": ["definite", "possible"]}, "memory_object_id": {"type": "string"}, "object_size": {"$ref": "#/$defs/interval"}, "offset": {"$ref": "#/$defs/interval"}, "access_size": {"type": "integer", "minimum": 0}, "reason": {"type": "array", "items": {"type": "string"}}}
+    },
+    "diagnostic": {
+      "type": "object", "required": ["diagnostic_id", "code", "severity", "message", "impact"],
+      "properties": {"diagnostic_id": {"type": "string"}, "code": {"type": "string"}, "severity": {"enum": ["unknown_effect", "unsupported", "error"]}, "message": {"type": "string"}, "impact": {"type": "string"}}
+    },
+    "interval": {"type": "object", "required": ["lower", "upper", "is_bottom"], "properties": {"lower": {"type": ["integer", "null"]}, "upper": {"type": ["integer", "null"]}, "is_bottom": {"type": "boolean"}}}
+  }
+}

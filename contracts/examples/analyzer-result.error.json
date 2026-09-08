@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "fixture-run-error",
+  "analyzer_version": "0.1.0",
+  "detector_id": "stack-bounds",
+  "detector_version": "0.1.0",
+  "rule_pack_id": "cwe121-core",
+  "rule_pack_version": "0.1.0",
+  "status": "error",
+  "summary": {"alarm_count": 0, "diagnostic_count": 1, "unsupported_count": 0, "error_count": 1},
+  "inputs": [],
+  "config": {},
+  "alarms": [],
+  "diagnostics": [{"diagnostic_id": "d-1", "code": "INVALID_INPUT", "severity": "error", "message": "MiniIR could not be loaded", "impact": "MiniIR could not be loaded"}],
+  "artifacts": [],
+  "cfg": [],
+  "block_states": [],
+  "trace": []
+}

@@ -1,0 +1,1 @@
+[{"sequence":1,"instruction_id":"i1","block_id":"bb.entry","kind":"alloca","detail":"创建栈对象 %buffer，大小 16 bytes","line":4},{"sequence":2,"instruction_id":"i2","block_id":"bb.copy","kind":"call","detail":"调用 memcpy，访问宽度 32 bytes","line":5}]

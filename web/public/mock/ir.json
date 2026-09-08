@@ -1,0 +1,1 @@
+{"file":"CWE131_memcpy_01.c","source":"char buffer[16];\nmemcpy(buffer, src, 32);\n","instructions":[]}

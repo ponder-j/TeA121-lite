@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tea121.local/contracts/sse-event.schema.json",
+  "title": "tea121 backend SSE event",
+  "type": "object",
+  "required": ["id", "event", "created_at", "data"],
+  "properties": {
+    "id": {"type": "string"},
+    "event": {"enum": ["run.started", "run.progress", "trace.event", "alarm.created", "diagnostic.created", "run.completed", "run.failed", "run.cancelled"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "data": {}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,53 @@
+import type { components } from '../types/openapi.generated';
+import type { Alarm, BlockState, Diagnostic, DetectorDescriptor, Evaluation, EvaluationCase, EvaluationMatrix, Page, Project, RulePackDescriptor, Run, RunArtifact, RunIr, SourceFile, TraceEvent } from '../types/generated';
+
+type RawProject = components['schemas']['ProjectOut'];
+type RawRun = components['schemas']['RunOut'];
+type RawAlarm = components['schemas']['AlarmOut'];
+type RawDiagnostic = components['schemas']['DiagnosticOut'];
+type RawDetector = components['schemas']['DetectorDescriptor'];
+type RawRulePack = components['schemas']['RulePackDescriptor'];
+type RawSourceFile = components['schemas']['SourceFileOut'];
+type RawSummary = components['schemas']['SummaryOut'];
+type RawEvaluation = components['schemas']['EvaluationOut'];
+type RawCase = components['schemas']['EvaluationCaseOut'];
+type RawMatrix = components['schemas']['MatrixOut'];
+
+const iso = (value: unknown) => value instanceof Date ? value.toISOString() : typeof value === 'string' ? value : new Date(0).toISOString();
+const interval = (value: { lower?: number | null; upper?: number | null }) => ({ lower: value.lower ?? Number.NEGATIVE_INFINITY, upper: value.upper ?? Number.POSITIVE_INFINITY });
+const status = (value: string): Run['status'] => ['queued', 'running', 'succeeded', 'failed', 'cancelled'].includes(value) ? value as Run['status'] : 'failed';
+
+export const adaptProject = (raw: RawProject): Project => ({ id: raw.id, name: raw.name, description: raw.description ?? '', file_count: 0, updated_at: iso(raw.created_at) });
+export const adaptSourceFile = (raw: RawSourceFile): SourceFile => ({ id: raw.id, project_id: raw.project_id, path: raw.path, language: raw.language, sha256: raw.sha256, size_bytes: raw.size_bytes, created_at: iso(raw.created_at) });
+export const adaptDetector = (raw: RawDetector): DetectorDescriptor => ({ id: raw.id, version: raw.version, name: raw.name, supported_cwes: raw.supported_cwes, enabled: raw.enabled });
+export const adaptRulePack = (raw: RawRulePack): RulePackDescriptor => ({ id: raw.id, detector_id: raw.detector_id, version: raw.version, name: raw.name, supported_cwes: raw.supported_cwes, supported_families: raw.supported_families, supported_violation_kinds: raw.supported_violation_kinds });
+export const adaptRun = (raw: RawRun, summary?: RawSummary): Run => ({ id: raw.id, project_id: raw.project_id, status: status(raw.status), progress: raw.progress, duration_ms: summary?.duration_ms ?? 0, created_at: iso(raw.created_at), completed_at: raw.finished_at ? iso(raw.finished_at) : undefined, analyzer_version: raw.analyzer_version, detector_id: raw.detector_id, detector_version: raw.detector_version, rule_pack_id: raw.rule_pack_id, rule_pack_version: raw.rule_pack_version, file_ids: raw.file_ids, mode: raw.mode === 'trace' ? 'trace' : 'normal', cwe_scope: [raw.config.cwe_id].filter((value): value is string => typeof value === 'string'), summary: { alarm_count: summary?.alarm_count ?? 0, diagnostic_count: summary?.diagnostic_count ?? 0, unsupported_count: summary?.unsupported_count ?? 0, error_count: summary?.error_count ?? (raw.error_message ? 1 : 0) } });
+export const adaptAlarm = (raw: RawAlarm): Alarm => ({ id: raw.id, run_id: raw.run_id, detector_id: raw.detector_id, rule_pack_id: raw.rule_pack_id, cwe_id: raw.cwe_id, family: raw.family ?? 'unknown', violation_kind: raw.violation_kind, severity: raw.severity, function: raw.function_name ?? 'unknown', message: raw.message || `${raw.cwe_id} ${raw.violation_kind}`, location: { file: raw.source_file_id ?? 'unknown', line: raw.source_line ?? 0, column: 0 }, memory_object_id: raw.memory_object_id, object_size: interval(raw.object_size), offset: interval(raw.offset), access_size_bytes: raw.access_size_bytes, safe_condition: raw.safe_condition, reason: raw.reason, instruction: raw.instruction_text ?? '', block_id: raw.block_id ?? '' });
+export const adaptDiagnostic = (raw: RawDiagnostic): Diagnostic => ({ id: raw.id, run_id: raw.run_id, code: raw.code, severity: raw.severity, message: raw.message, location: raw.source_line ? { file: raw.source_file_id ?? 'unknown', line: raw.source_line, column: 0 } : undefined, impact: raw.impact });
+type RawCfg = { nodes?: Array<{ id: string; label?: string | null; function?: string | null; entry_state?: Record<string, unknown>; exit_state?: Record<string, unknown> }>; edges?: Array<{ source: string; target: string; function?: string | null; condition?: string | null; polarity?: 'true' | 'false' | null }> };
+export const adaptCfg = (raw: RawCfg) => ({ nodes: (raw.nodes ?? []).map(node => ({ id: node.id, label: node.label ?? (node.id === 'bb0' ? 'entry' : node.id), function: node.function ?? undefined, instructions: 0 })), edges: (raw.edges ?? []).map(edge => ({ source: edge.source, target: edge.target, function: edge.function ?? undefined, condition: edge.condition ?? undefined, polarity: edge.polarity ?? undefined })) });
+export const adaptStates = (raw: { items?: Array<{ block_id: string; function_name?: string | null; entry_state?: Record<string, unknown>; exit_state?: Record<string, unknown> }> }): Page<BlockState> => ({ items: (raw.items ?? []).map(item => ({ block_id: item.block_id, label: item.function_name ?? item.block_id, function: item.function_name ?? undefined, entry_state: Object.fromEntries(Object.entries(item.entry_state ?? {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)])), exit_state: Object.fromEntries(Object.entries(item.exit_state ?? {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)])), trace_event_ids: [] })), total: raw.items?.length ?? 0, limit: raw.items?.length ?? 0, offset: 0 });
+const readableIrLines = (content: string, sourcePath: string) => content
+  .split('\n')
+  .map(line => line
+    .replace(/\/tmp\/tea121-[^/\s]+\/(?:input\.c|raw\.ll)/g, sourcePath)
+    .replace(/,\s*!(?:dbg|tbaa|prof|range)\s*!\d+/g, ''))
+  .filter(line => {
+    const trimmed = line.trim();
+    return trimmed.length > 0
+      && !/^;(?: ModuleID| Function Attrs)/.test(trimmed)
+      && !/^source_filename\s*=/.test(trimmed)
+      && !/^target (?:datalayout|triple)/.test(trimmed)
+      && !/^attributes #/.test(trimmed)
+      && !/^declare .*@llvm\.dbg\./.test(trimmed)
+      && !/^(?:call|invoke) .*@llvm\.dbg\./.test(trimmed)
+      && !/^![A-Za-z0-9_.-]+\s*=/.test(trimmed);
+  });
+export const adaptIr = (raw: { source_file_path?: string | null; items?: Array<{ id: string; kind: string; content: string; source_file_id?: string | null; source_file_path?: string | null; function_name?: string | null; sha256?: string | null }> }): RunIr => { const items = raw.items ?? []; const source = items.find(item => item.kind === 'source'); const sourcePath = source?.source_file_path ?? raw.source_file_path ?? 'source.c'; const irItems = items.filter(item => item.kind === 'ir' || item.kind === 'normalized_ir'); const artifacts: RunArtifact[] = items.map(item => ({ id: item.id, kind: item.kind, source_file_id: item.source_file_id ?? undefined, function_name: item.function_name ?? undefined, sha256: item.sha256 ?? undefined, size_bytes: item.content.length, content: item.content })); const instructions = irItems.flatMap(item => readableIrLines(item.content, sourcePath).map(text => ({ text, block_id: '' }))).map((instruction, index) => ({ ...instruction, id: String(index + 1), line: index + 1 })); return { file: sourcePath, source: source?.content ?? '', instructions, artifacts }; };
+export const adaptTrace = (raw: { items?: Array<{ sequence_no: number; instruction_id?: string | null; block_id?: string | null; event_type: string; explanation: string }> }): TraceEvent[] => (raw.items ?? []).map(event => ({ sequence: event.sequence_no, instruction_id: event.instruction_id ?? '', block_id: event.block_id ?? '', kind: event.event_type, detail: event.explanation, line: 0 }));
+export const adaptSummary = (raw: RawSummary) => raw;
+export const adaptEvaluation = (raw: RawEvaluation): Evaluation => { const summary = raw.summary ?? {}; const number = (key: string) => typeof summary[key] === 'number' ? summary[key] as number : 0; return { id: raw.id, project_id: raw.project_id, dataset: raw.dataset_name, status: raw.status === 'completed' || raw.status === 'failed' ? raw.status : 'running', created_at: iso(raw.created_at), detector_id: raw.detector_id, rule_pack_id: raw.rule_pack_id, matrix: { correctly_classified: number('correct'), false_positive: number('false_positive'), false_negative: number('false_negative'), inverted: number('inverted') }, metrics: { bad_recall: typeof summary.bad_recall === 'number' ? summary.bad_recall * 100 : 0, good_silent_rate: typeof summary.good_specificity === 'number' ? summary.good_specificity * 100 : 0, file_accuracy: typeof summary.file_accuracy === 'number' ? summary.file_accuracy * 100 : 0 }, by_family: [], trend: [] }; };
+export const adaptEvaluationCase = (raw: RawCase): EvaluationCase => ({ id: raw.id, evaluation_id: raw.evaluation_id, case_name: raw.case_name, cwe_id: raw.cwe_id, family: raw.family, bad_run_id: raw.bad_run_id, good_run_id: raw.good_run_id, bad_outcome: raw.bad_outcome, good_outcome: raw.good_outcome, classification: raw.classification });
+export const adaptEvaluationMatrix = (raw: RawMatrix): EvaluationMatrix => ({ detector_id: raw.detector_id, rule_pack_id: raw.rule_pack_id, cwe_id: raw.cwe_id ?? null, family: raw.family ?? null, correct: raw.correct, false_positive: raw.false_positive, false_negative: raw.false_negative, inverted: raw.inverted, unsupported: raw.unsupported, error: raw.error, total: raw.total, bad_recall: raw.bad_recall ?? null, good_specificity: raw.good_specificity ?? null, file_accuracy: raw.file_accuracy ?? null });
+export const mapPage = <TRaw, T>(raw: { items: TRaw[]; total: number; limit: number; offset: number }, mapper: (item: TRaw) => T): Page<T> => ({ items: raw.items.map(mapper), total: raw.total, limit: raw.limit, offset: raw.offset });
+export type AdapterViewModels = { Project: Project; Run: Run; Alarm: Alarm; Diagnostic: Diagnostic; Detector: DetectorDescriptor; RulePack: RulePackDescriptor; SourceFile: SourceFile; BlockState: BlockState; RunIr: RunIr; TraceEvent: TraceEvent; Evaluation: Evaluation };

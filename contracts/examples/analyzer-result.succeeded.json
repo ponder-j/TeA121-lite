@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "fixture-run-safe",
+  "analyzer_version": "0.1.0",
+  "detector_id": "stack-bounds",
+  "detector_version": "0.1.0",
+  "rule_pack_id": "cwe121-core",
+  "rule_pack_version": "0.1.0",
+  "status": "succeeded",
+  "summary": {"alarm_count": 0, "diagnostic_count": 0, "unsupported_count": 0, "error_count": 0},
+  "inputs": [{"path": "safe_store.json"}],
+  "config": {"mode": "normal", "widen_after": 3},
+  "alarms": [],
+  "diagnostics": [],
+  "artifacts": [],
+  "cfg": [],
+  "block_states": [],
+  "trace": []
+}

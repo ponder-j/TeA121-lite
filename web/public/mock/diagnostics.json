@@ -1,0 +1,1 @@
+{"items":[{"id":"diag-001","run_id":"run-001","code":"UNSUPPORTED_CALL","severity":"unsupported","message":"无法建模外部函数 rand_s","impact":"相关对象已标记 escaped；该样例不会被计入 clean。"}],"total":1,"limit":100,"offset":0}

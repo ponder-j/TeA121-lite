@@ -1,0 +1,29 @@
+# 开发手册与截图等本地文档
+开发手册/
+图片/
+
+# 第三方 Juliet 测试集（内含独立 Git 仓库，整体忽略）
+juliet测试集/
+
+# 前端依赖与构建/测试产物
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
+web/test-results/
+web/playwright-report/
+
+# Python 环境与打包产物
+backend/.venv/
+.tea121-data/
+*.egg-info/
+
+# 运行时数据与结果
+backend/data/
+analysis-output/
+*.db
+
+# 缓存与中间文件
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/

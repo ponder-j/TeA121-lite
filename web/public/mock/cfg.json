@@ -1,0 +1,1 @@
+{"nodes":[{"id":"bb.entry","label":"entry","instructions":8},{"id":"bb.check","label":"check_index","instructions":5},{"id":"bb.copy","label":"copy","instructions":4}],"edges":[{"source":"bb.entry","target":"bb.check","condition":"index >= 0","polarity":"true"}]}

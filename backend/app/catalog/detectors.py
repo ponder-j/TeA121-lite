@@ -1,0 +1,38 @@
+import json
+
+from sqlalchemy.orm import Session
+
+from app.db.models import Detector
+
+DEFAULT_DETECTOR = {
+    "id": "stack-bounds",
+    "version": "0.1.0",
+    "name": "Stack bounds detector",
+    "supported_cwes": ["CWE-121"],
+    "enabled": True,
+}
+
+
+def seed(db: Session) -> Detector:
+    row = db.get(Detector, DEFAULT_DETECTOR["id"])
+    if row is None:
+        row = Detector(
+            id=DEFAULT_DETECTOR["id"],
+            version=DEFAULT_DETECTOR["version"],
+            name=DEFAULT_DETECTOR["name"],
+            supported_cwes_json=json.dumps(DEFAULT_DETECTOR["supported_cwes"]),
+            enabled=True,
+        )
+        db.add(row)
+        db.commit()
+    return row
+
+
+def as_dict(row: Detector) -> dict:
+    return {
+        "id": row.id,
+        "version": row.version,
+        "name": row.name,
+        "supported_cwes": json.loads(row.supported_cwes_json),
+        "enabled": row.enabled,
+    }

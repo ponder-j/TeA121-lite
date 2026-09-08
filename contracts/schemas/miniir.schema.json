@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tea121.local/contracts/miniir.schema.json",
+  "title": "tea121 MiniIR",
+  "type": "object",
+  "required": ["schema_version", "functions"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0.0"},
+    "llvm_version": {"type": "string"},
+    "target_triple": {"type": "string"},
+    "data_layout": {"type": "string"},
+    "functions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/function"}
+    }
+  },
+  "$defs": {
+    "function": {
+      "type": "object",
+      "required": ["name", "blocks"],
+      "properties": {
+        "name": {"type": "string"},
+        "entry": {"type": "string"},
+        "blocks": {"type": "array", "items": {"$ref": "#/$defs/block"}}
+      }
+    },
+    "block": {
+      "type": "object",
+      "required": ["id", "instructions"],
+      "properties": {
+        "id": {"type": "string"},
+        "instructions": {"type": "array", "items": {"type": "object"}},
+        "successors": {"type": "array", "items": {"type": "string"}},
+        "terminator": {"type": "object"}
+      }
+    }
+  }
+}

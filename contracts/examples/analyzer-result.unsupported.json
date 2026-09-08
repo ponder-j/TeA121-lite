@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "fixture-run-unsupported",
+  "analyzer_version": "0.1.0",
+  "detector_id": "stack-bounds",
+  "detector_version": "0.1.0",
+  "rule_pack_id": "cwe121-core",
+  "rule_pack_version": "0.1.0",
+  "status": "unsupported",
+  "summary": {"alarm_count": 0, "diagnostic_count": 1, "unsupported_count": 1, "error_count": 0},
+  "inputs": [{"path": "unknown.ll"}],
+  "config": {},
+  "alarms": [],
+  "diagnostics": [{"diagnostic_id": "d-1", "code": "UNSUPPORTED_INSTRUCTION", "severity": "unsupported", "message": "unsupported MiniIR instruction", "impact": "instruction semantics are not implemented"}],
+  "artifacts": [],
+  "cfg": [],
+  "block_states": [],
+  "trace": []
+}

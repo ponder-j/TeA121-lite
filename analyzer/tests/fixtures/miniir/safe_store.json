@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0.0",
+  "llvm_version": "fixture",
+  "target_triple": "x86_64-unknown-linux-gnu",
+  "data_layout": "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
+  "functions": [{
+    "name": "safe_store", "entry": "entry",
+    "blocks": [{"id": "entry", "instructions": [
+      {"id": "buf", "op": "alloca", "result": "buf", "count": 8, "element_size": 1},
+      {"id": "ptr", "op": "gep", "result": "ptr", "base": "buf", "index": 7, "element_size": 1},
+      {"id": "store", "op": "store", "pointer": "ptr", "width": 1}
+    ]}]
+  }]
+}
