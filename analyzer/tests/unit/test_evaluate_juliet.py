@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 
-from evaluate_juliet import _summary, classify_pair, classify_result, discover_cases
+from evaluate_juliet import _summary, classify_pair, classify_result, compact_analyzer_result, discover_cases
 
 
 def touch_case(root: Path, *names: str) -> None:
@@ -116,3 +116,32 @@ def test_batch_summary_reports_binary_confusion_and_suites():
     assert summary["binary_metrics"]["supported_specificity"] == 0.666667
     assert summary["by_suite"]["s01"]["binary_confusion"]["tp"] == 1
     assert summary["by_suite"]["s02"]["binary_confusion"]["unsupported"] == 2
+
+
+def test_compact_analyzer_result_keeps_evidence_and_drops_bulk():
+    result = {
+        "status": "succeeded",
+        "summary": {"alarm_count": 1},
+        "alarms": [{
+            "severity": "possible",
+            "cwe_id": "CWE-121",
+            "violation_kind": "buffer_overflow",
+            "message": "out of bounds",
+            "instruction_id": "store",
+            "location": {"line": 7},
+        }],
+        "diagnostics": [{
+            "severity": "unknown_effect",
+            "code": "UNKNOWN_CALL",
+            "message": "unknown",
+        }],
+        "cfg": [{"bulk": True}],
+        "block_states": [{"bulk": True}],
+        "trace": [{"bulk": True}],
+    }
+    compact = compact_analyzer_result(result)
+    assert compact["status"] == "succeeded"
+    assert compact["alarms"][0]["instruction_id"] == "store"
+    assert compact["diagnostics"][0]["code"] == "UNKNOWN_CALL"
+    assert compact["truncated"] == {"alarms": 0, "diagnostics": 0}
+    assert "cfg" not in compact and "block_states" not in compact and "trace" not in compact

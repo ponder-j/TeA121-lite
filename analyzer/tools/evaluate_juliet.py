@@ -128,10 +128,46 @@ def _run(command: list[str], timeout: float) -> tuple[subprocess.CompletedProces
         return None, str(exc)
 
 
+def compact_analyzer_result(result: dict[str, Any], limit: int = 64) -> dict[str, Any]:
+    """Keep verdict evidence while dropping CFG/state/trace bulk.
+
+    Full analyzer results are useful for a single-case workbench, but retaining
+    them for every side of a multi-thousand-case Juliet run can exhaust the
+    container memory and make the manifest impractically large.
+    """
+    alarms = [
+        {
+            key: item.get(key)
+            for key in ("severity", "cwe_id", "violation_kind", "message", "instruction_id", "location")
+            if item.get(key) is not None
+        }
+        for item in (result.get("alarms") or [])[:limit]
+    ]
+    diagnostics = [
+        {
+            key: item.get(key)
+            for key in ("severity", "code", "message", "instruction_id", "location")
+            if item.get(key) is not None
+        }
+        for item in (result.get("diagnostics") or [])[:limit]
+    ]
+    return {
+        "status": result.get("status"),
+        "summary": result.get("summary"),
+        "alarms": alarms,
+        "diagnostics": diagnostics,
+        "truncated": {
+            "alarms": max(0, len(result.get("alarms") or []) - len(alarms)),
+            "diagnostics": max(0, len(result.get("diagnostics") or []) - len(diagnostics)),
+        },
+    }
+
+
 def analyze_side(
     files: Iterable[Path], macro: str, workdir: Path, include_dirs: tuple[Path, ...],
     defines: tuple[str, ...], timeout: float, keep_artifacts: bool,
     input_files: Iterable[Path] | None = None,
+    include_raw_result: bool = True,
 ) -> dict[str, Any]:
     """Compile, normalize, extract, and analyze one side."""
     sources = tuple(files)
@@ -211,7 +247,8 @@ def analyze_side(
         except json.JSONDecodeError as exc:
             metadata.update(outcome="error", code="INVALID_ANALYZER_RESULT", message=str(exc), stdout_tail=completed.stdout[-1000:])
             return metadata
-        metadata.update(outcome=classify_result(result), analyzer_status=result.get("status"), alarm_count=len(result.get("alarms") or []), diagnostic_count=len(result.get("diagnostics") or []), result=result)
+        stored_result = result if include_raw_result else compact_analyzer_result(result)
+        metadata.update(outcome=classify_result(result), analyzer_status=result.get("status"), alarm_count=len(result.get("alarms") or []), diagnostic_count=len(result.get("diagnostics") or []), result=stored_result)
         if keep_artifacts:
             metadata["artifacts"] = {"module": str(miniir), "normalized_ir": str(normalized)}
         return metadata
@@ -271,11 +308,11 @@ def write_csv(path: Path, cases: list[dict[str, Any]]) -> None:
             writer.writerow({"case_name": case["case_name"], "family": case.get("family"), "variant": case.get("variant"), "classification": case["classification"], "bad_outcome": case["bad"]["outcome"], "good_outcome": case["good"]["outcome"], "bad_duration_ms": case["bad"].get("duration_ms"), "good_duration_ms": case["good"].get("duration_ms")})
 
 
-def _evaluate_case(case: CaseFiles, temp_root: Path, include_dirs: tuple[Path, ...], defines: tuple[str, ...], timeout: float, keep_artifacts: bool) -> dict[str, Any]:
+def _evaluate_case(case: CaseFiles, temp_root: Path, include_dirs: tuple[Path, ...], defines: tuple[str, ...], timeout: float, keep_artifacts: bool, include_raw_result: bool = True) -> dict[str, Any]:
     safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", case.case_name)
     case_dir = temp_root / safe_name
-    bad = analyze_side(case.bad_files, "OMITGOOD", case_dir / "bad", include_dirs, defines, timeout, keep_artifacts, case.files)
-    good = analyze_side(case.good_files, "OMITBAD", case_dir / "good", include_dirs, defines, timeout, keep_artifacts, case.files)
+    bad = analyze_side(case.bad_files, "OMITGOOD", case_dir / "bad", include_dirs, defines, timeout, keep_artifacts, case.files, include_raw_result)
+    good = analyze_side(case.good_files, "OMITBAD", case_dir / "good", include_dirs, defines, timeout, keep_artifacts, case.files, include_raw_result)
     return {"case_name": case.case_name, "family": case.family, "variant": case.variant, "files": [str(path) for path in case.files], "bad": bad, "good": good, "classification": classify_pair(bad["outcome"], good["outcome"])}
 
 

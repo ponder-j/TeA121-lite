@@ -179,11 +179,11 @@ def write_csv(path: Path, cases: list[dict[str, Any]]) -> None:
         writer.writeheader()
         for case in cases:
             bad_codes = sorted({
-                str(item.get("code")) for item in case["bad"].get("diagnostics") or []
+                str(item.get("code")) for item in (case["bad"].get("result") or {}).get("diagnostics") or []
                 if item.get("code")
             })
             good_codes = sorted({
-                str(item.get("code")) for item in case["good"].get("diagnostics") or []
+                str(item.get("code")) for item in (case["good"].get("result") or {}).get("diagnostics") or []
                 if item.get("code")
             })
             writer.writerow({
@@ -204,7 +204,7 @@ def write_csv(path: Path, cases: list[dict[str, Any]]) -> None:
 
 
 def evaluate_case(case: CaseFiles, suite: str, temp_root: Path, include_dirs: tuple[Path, ...], defines: tuple[str, ...], timeout: float, keep_artifacts: bool) -> dict[str, Any]:
-    record = _evaluate_case(case, temp_root, include_dirs, defines, timeout, keep_artifacts)
+    record = _evaluate_case(case, temp_root, include_dirs, defines, timeout, keep_artifacts, include_raw_result=False)
     record["suite"] = suite
     return record
 
