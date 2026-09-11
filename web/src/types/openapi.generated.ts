@@ -67,7 +67,8 @@ export interface paths {
         };
         /** Get File */
         get: operations["get_file_api_v1_projects__project_id__files__file_id__get"];
-        put?: never;
+        /** Update File */
+        put: operations["update_file_api_v1_projects__project_id__files__file_id__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -577,6 +578,10 @@ export interface components {
             cases?: {
                 [key: string]: unknown;
             }[];
+            /** Manifest Path */
+            manifest_path?: string | null;
+            /** Max Cases */
+            max_cases?: number | null;
         };
         /** EvaluationOut */
         EvaluationOut: {
@@ -766,6 +771,11 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
+            /**
+             * Debug Mode
+             * @default false
+             */
+            debug_mode: boolean;
         };
         /** ProjectOut */
         ProjectOut: {
@@ -775,6 +785,8 @@ export interface components {
             name: string;
             /** Description */
             description: string | null;
+            /** Debug Mode */
+            debug_mode: boolean;
             /** Created At */
             created_at: unknown;
         };
@@ -870,6 +882,25 @@ export interface components {
             /** Finished At */
             finished_at?: unknown;
         };
+        /** SourceFileDetailOut */
+        SourceFileDetailOut: {
+            /** Id */
+            id: string;
+            /** Project Id */
+            project_id: string;
+            /** Path */
+            path: string;
+            /** Language */
+            language: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Created At */
+            created_at: unknown;
+            /** Content */
+            content: string;
+        };
         /** SourceFileOut */
         SourceFileOut: {
             /** Id */
@@ -886,6 +917,11 @@ export interface components {
             size_bytes: number;
             /** Created At */
             created_at: unknown;
+        };
+        /** SourceFileUpdate */
+        SourceFileUpdate: {
+            /** Content */
+            content: string;
         };
         /** SummaryOut */
         SummaryOut: {
@@ -1148,7 +1184,43 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SourceFileDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_file_api_v1_projects__project_id__files__file_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceFileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceFileDetailOut"];
                 };
             };
             /** @description Validation Error */

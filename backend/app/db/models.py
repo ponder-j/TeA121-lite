@@ -29,6 +29,7 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    debug_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(default=now)
     files: Mapped[list["SourceFile"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"

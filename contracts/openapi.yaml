@@ -203,7 +203,45 @@ paths:
           description: Successful Response
           content:
             application/json:
-              schema: {}
+              schema:
+                $ref: '#/components/schemas/SourceFileDetailOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - projects
+      summary: Update File
+      operationId: update_file_api_v1_projects__project_id__files__file_id__put
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: File Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceFileUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceFileDetailOut'
         '422':
           description: Validation Error
           content:
@@ -1758,6 +1796,10 @@ components:
           - type: string
           - type: 'null'
           title: Description
+        debug_mode:
+          type: boolean
+          title: Debug Mode
+          default: false
       type: object
       required:
       - name
@@ -1775,6 +1817,9 @@ components:
           - type: string
           - type: 'null'
           title: Description
+        debug_mode:
+          type: boolean
+          title: Debug Mode
         created_at:
           title: Created At
       type: object
@@ -1782,6 +1827,7 @@ components:
       - id
       - name
       - description
+      - debug_mode
       - created_at
       title: ProjectOut
     RulePackDescriptor:
@@ -1958,6 +2004,42 @@ components:
       - error_message
       - created_at
       title: RunOut
+    SourceFileDetailOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        project_id:
+          type: string
+          title: Project Id
+        path:
+          type: string
+          title: Path
+        language:
+          type: string
+          title: Language
+        sha256:
+          type: string
+          title: Sha256
+        size_bytes:
+          type: integer
+          title: Size Bytes
+        created_at:
+          title: Created At
+        content:
+          type: string
+          title: Content
+      type: object
+      required:
+      - id
+      - project_id
+      - path
+      - language
+      - sha256
+      - size_bytes
+      - created_at
+      - content
+      title: SourceFileDetailOut
     SourceFileOut:
       properties:
         id:
@@ -1990,6 +2072,15 @@ components:
       - size_bytes
       - created_at
       title: SourceFileOut
+    SourceFileUpdate:
+      properties:
+        content:
+          type: string
+          title: Content
+      type: object
+      required:
+      - content
+      title: SourceFileUpdate
     SummaryOut:
       properties:
         run_id:

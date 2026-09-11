@@ -35,9 +35,16 @@ def init_db() -> None:
 
     Base.metadata.create_all(engine)
     # ``create_all`` deliberately does not alter an existing development DB.
-    # Add the one additive column needed by the richer CFG response so users
-    # upgrading an existing checkout do not need to delete their data.
-    columns = {column["name"] for column in inspect(engine).get_columns("cfg_nodes")}
+    # Apply additive columns so users upgrading an existing checkout do not
+    # need to delete their data.
+    inspector = inspect(engine)
+    project_columns = {column["name"] for column in inspector.get_columns("projects")}
+    if "debug_mode" not in project_columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE projects ADD COLUMN debug_mode BOOLEAN NOT NULL DEFAULT 0")
+            )
+    columns = {column["name"] for column in inspector.get_columns("cfg_nodes")}
     if "metadata_json" not in columns:
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE cfg_nodes ADD COLUMN metadata_json TEXT DEFAULT '{}'"))

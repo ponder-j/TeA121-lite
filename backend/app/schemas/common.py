@@ -42,6 +42,7 @@ class Interval(BaseModel):
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = None
+    debug_mode: bool = False
 
 
 class ProjectOut(BaseModel):
@@ -49,6 +50,7 @@ class ProjectOut(BaseModel):
     id: str
     name: str
     description: str | None
+    debug_mode: bool
     created_at: Any
 
 
@@ -61,6 +63,14 @@ class SourceFileOut(BaseModel):
     sha256: str
     size_bytes: int
     created_at: Any
+
+
+class SourceFileDetailOut(SourceFileOut):
+    content: str
+
+
+class SourceFileUpdate(BaseModel):
+    content: str
 
 
 class DetectorDescriptor(BaseModel):

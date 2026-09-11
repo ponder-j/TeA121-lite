@@ -66,6 +66,64 @@ def test_integer_overflow_alarm_is_imported():
         assert alarm["severity"] == "definite"
 
 
+def test_debug_project_edits_source_and_persists_rerun_results():
+    with TestClient(app) as client:
+        project = client.post(
+            "/api/v1/projects", json={"name": "debug-live-edit", "debug_mode": True}
+        ).json()
+        assert project["debug_mode"] is True
+
+        files = client.get(f"/api/v1/projects/{project['id']}/files").json()
+        assert files["total"] == 1
+        blank = client.get(
+            f"/api/v1/projects/{project['id']}/files/{files['items'][0]['id']}"
+        ).json()
+        assert blank["path"] == "blank.c"
+        assert blank["content"] == ""
+        assert blank["size_bytes"] == 0
+
+        edited_source = "int main(void) { return 0; }\n"
+        updated = client.put(
+            f"/api/v1/projects/{project['id']}/files/{blank['id']}",
+            json={"content": edited_source},
+        )
+        assert updated.status_code == 200
+        revision = updated.json()
+        assert revision["id"] != blank["id"]
+        assert revision["content"] == edited_source
+        assert revision["size_bytes"] == len(edited_source.encode())
+
+        with SessionLocal() as db:
+            stored = db.get(SourceFile, revision["id"])
+            assert stored is not None
+            assert stored.content == edited_source
+
+        response = client.post(
+            f"/api/v1/projects/{project['id']}/runs",
+            json={
+                "file_ids": [revision["id"]],
+                "detector_id": "stack-bounds",
+                "rule_pack_id": "cwe121-core",
+                "config": {
+                    "fixture_path": "contracts/examples/analyzer-result.succeeded.json"
+                },
+            },
+        )
+        assert response.status_code == 202
+        run_id = response.json()["id"]
+        for _ in range(30):
+            current = client.get(f"/api/v1/runs/{run_id}").json()
+            if current["status"] not in {"queued", "running"}:
+                break
+            time.sleep(0.05)
+        assert current["status"] == "succeeded"
+
+        artifacts = client.get(f"/api/v1/runs/{run_id}/ir").json()["items"]
+        source = next(item for item in artifacts if item["kind"] == "source")
+        assert source["source_file_id"] == revision["id"]
+        assert source["content"] == edited_source
+
+
 def test_delete_project_cascades_database_rows():
     with TestClient(app) as client:
         project = client.post("/api/v1/projects", json={"name": "delete-demo"}).json()

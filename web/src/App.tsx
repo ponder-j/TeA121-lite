@@ -113,13 +113,32 @@ function ProjectsPage() {
 }
 
 function NewProjectPage() {
-  const navigate = useNavigate(); const [name, setName] = useState(''); const [description, setDescription] = useState(''); const [files, setFiles] = useState<File[]>([]); const [created, setCreated] = useState(false); const [error, setError] = useState('');
-  const submit = async () => { setCreated(true); setError(''); try { const project = await api.createProject({ name, description }); await Promise.all(files.map(file => api.uploadFile(project.id, file))); navigate(`/projects/${project.id}`); } catch { setCreated(false); setError('项目创建失败，请检查 API 连接后重试。'); } };
-  return <><Link className="back-link" to="/"><ArrowLeft size={15} />返回项目</Link><PageHeader eyebrow="PROJECTS / NEW" title="创建项目" description="上传 C 源文件，开始一次可复现的 CWE-121 分析。" /><section className="form-card"><label>项目名称<input value={name} onChange={e => setName(e.target.value)} placeholder="例如：我的栈边界实验" /></label><label>项目描述<textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="可选，描述数据集或实验目的" rows={3} /></label><label>源文件<span className="upload-drop"><Upload size={20} /><b>{files.length ? `${files.length} 个文件已选择` : '选择 .c / .h 文件'}</b><small>支持多文件上传，单文件不超过 10 MB</small><input type="file" accept=".c,.h,.cpp" multiple onChange={e => setFiles(Array.from(e.target.files ?? []))} /></span></label>{error && <div className="form-error"><AlertOctagon size={14} />{error}</div>}<div className="form-actions"><button className="secondary-btn" onClick={() => navigate('/')}>取消</button><button className="primary-btn" disabled={!name || !files.length || created} onClick={() => void submit()}><Plus size={16} />{created ? '创建中...' : '创建项目'}</button></div></section></>;
+  const navigate = useNavigate();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [debugMode, setDebugMode] = useState(false);
+  const [created, setCreated] = useState(false);
+  const [error, setError] = useState('');
+  const canSubmit = Boolean(name) && (debugMode || files.length > 0) && !created;
+  const submit = async () => {
+    if (!canSubmit) return;
+    setCreated(true);
+    setError('');
+    try {
+      const project = await api.createProject({ name, description, debug_mode: debugMode });
+      if (!debugMode) await Promise.all(files.map(file => api.uploadFile(project.id, file)));
+      navigate(`/projects/${project.id}`);
+    } catch {
+      setCreated(false);
+      setError('项目创建失败，请检查 API 连接后重试。');
+    }
+  };
+  return <><Link className="back-link" to="/"><ArrowLeft size={15} />返回项目</Link><PageHeader eyebrow="PROJECTS / NEW" title="创建项目" description={debugMode ? '自动创建 blank.c，在分析工作台中现场修改并反复验证。' : '上传 C 源文件，开始一次可复现的 CWE-121 分析。'} /><section className="form-card"><label>项目名称<input value={name} onChange={e => setName(e.target.value)} placeholder="例如：我的栈边界实验" /></label><label>项目描述<textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="可选，描述数据集或实验目的" rows={3} /></label><label>源文件{debugMode ? <span className="debug-file-hint"><FileCode2 size={18} /><b>blank.c · 自动创建</b><small>现场修改调试无需预先上传源文件</small></span> : <span className="upload-drop"><Upload size={20} /><b>{files.length ? `${files.length} 个文件已选择` : '选择 .c / .h 文件'}</b><small>支持多文件上传，单文件不超过 10 MB</small><input type="file" accept=".c,.h,.cpp" multiple onChange={e => setFiles(Array.from(e.target.files ?? []))} /></span>}</label>{error && <div className="form-error"><AlertOctagon size={14} />{error}</div>}<div className="form-actions debug-form-actions"><div className={`debug-mode-control ${debugMode ? 'enabled' : ''}`}><div><b>debug模式</b><span>现场修改调试</span></div><button type="button" role="switch" aria-checked={debugMode} aria-label="debug模式" className={`toggle-switch ${debugMode ? 'on' : ''}`} onClick={() => setDebugMode(value => !value)}><span /></button></div><div className="form-action-buttons"><button className="secondary-btn" onClick={() => navigate('/')}>取消</button><button className="primary-btn" disabled={!canSubmit} onClick={() => void submit()}><Plus size={16} />{created ? '创建中...' : debugMode ? '创建并调试' : '创建项目'}</button></div></div></section></>;
 }
 
 function ProjectRunsPage() { const { projectId = 'proj-001' } = useParams(); const projectQ = useQuery({ queryKey: ['project', projectId], queryFn: () => api.getProject(projectId) }); const runsQ = useQuery({ queryKey: ['runs', projectId], queryFn: () => api.listProjectRuns(projectId) }); const filesQ = useQuery({ queryKey: ['files', projectId], queryFn: () => api.listProjectFiles(projectId) }); const navigate = useNavigate(); const [showModal, setShowModal] = useState(false); const [detector, setDetector] = useState('stack-bounds'); const [creating, setCreating] = useState(false); const [createError, setCreateError] = useState(''); const detectorsQ = useQuery({ queryKey: ['detectors'], queryFn: () => api.listDetectors() }); const packsQ = useQuery({ queryKey: ['packs', detector], queryFn: () => api.listRulePacks(detector) }); const project = projectQ.data;
-  const startRun = async () => { const pack = packsQ.data?.items[0]; if (!pack || !filesQ.data?.items.length) return; setCreating(true); setCreateError(''); try { const run = await api.createRun(projectId, { file_ids: filesQ.data.items.map(file => file.id), detector_id: detector, rule_pack_id: pack.id }); navigate(`/runs/${run.id}`); } catch (error) { setCreateError(error instanceof Error ? error.message : '启动分析失败，请稍后重试。'); } finally { setCreating(false); } };
+  const startRun = async () => { const pack = packsQ.data?.items[0]; if (!pack || !filesQ.data?.items.length) return; setCreating(true); setCreateError(''); try { const run = await api.createRun(projectId, { file_ids: filesQ.data.items.map(file => file.id), detector_id: detector, rule_pack_id: pack.id }); navigate(project?.debug_mode ? `/runs/${run.id}/workbench` : `/runs/${run.id}`); } catch (error) { setCreateError(error instanceof Error ? error.message : '启动分析失败，请稍后重试。'); } finally { setCreating(false); } };
   return <><Link className="back-link" to="/"><ArrowLeft size={15} />所有项目</Link><PageHeader eyebrow="PROJECT / RUNS" title={project?.name ?? '项目'} description={project?.description} action={<button className="primary-btn" onClick={() => setShowModal(true)}><Play size={16} />新建运行</button>} />
     <div className="project-overview"><div><span className="label">源文件</span><strong>{filesQ.data?.total ?? '--'}</strong></div><div><span className="label">最近更新</span><strong>{project ? fmtDate(project.updated_at) : '--'}</strong></div><div><span className="label">检测器</span><strong>stack-bounds</strong></div><div><span className="label">规则包</span><strong>cwe121-core</strong></div></div>
     <section className="section"><div className="section-heading"><div><h2>运行历史</h2><span>保留每次运行的版本快照和分析结果</span></div><button className="secondary-btn"><Filter size={15} />筛选</button></div><div className="run-list">{runsQ.data?.items.map(run => <button className="run-row" key={run.id} onClick={() => navigate(`/runs/${run.id}`)}><div className="run-main"><StatusBadge status={run.status} /><b>{run.id}</b><span>{fmtDate(run.created_at)}</span></div><div className="run-config"><span>{run.detector_id}</span><span>/</span><span>{run.rule_pack_id}</span></div><div className="run-counts"><span className="alarm-count"><ShieldAlert size={14} />{run.summary.alarm_count}</span><span className="diag-count">{run.summary.diagnostic_count} diagnostics</span></div><ChevronRight size={17} /></button>)}</div></section>
@@ -136,6 +155,13 @@ function Metric({ label, value, icon, tone = '' }: { label: string; value: numbe
 
 function WorkbenchPage() {
   const { runId = 'run-001' } = useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const runQ = useRun(runId);
+  const run = runQ.data;
+  const projectQ = useQuery({ queryKey: ['project', run?.project_id], queryFn: () => api.getProject(run!.project_id), enabled: Boolean(run?.project_id) });
+  const primaryFileId = run?.file_ids[0] ?? '';
+  const sourceQ = useQuery({ queryKey: ['source-file', run?.project_id, primaryFileId], queryFn: () => api.getSourceFile(run!.project_id, primaryFileId), enabled: Boolean(run?.project_id && primaryFileId) });
   const alarmQ = useQuery({ queryKey: ['alarms', runId], queryFn: () => api.listAlarms(runId) });
   const diagQ = useQuery({ queryKey: ['diagnostics', runId], queryFn: () => api.listDiagnostics(runId) });
   const stateQ = useQuery({ queryKey: ['states', runId], queryFn: () => api.getBlockStates(runId) });
@@ -147,7 +173,18 @@ function WorkbenchPage() {
   const [selectedLine, setSelectedLine] = useState<number | null>(null);
   const [selectedDiagnosticId, setSelectedDiagnosticId] = useState<string | null>(null);
   const [tab, setTab] = useState<'alarms' | 'diagnostics'>('alarms');
+  const [sourceDraft, setSourceDraft] = useState('');
+  const [savedSource, setSavedSource] = useState('');
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
   const sourceRef = useRef<HTMLDivElement>(null);
+  const sourceEditorRef = useRef<HTMLTextAreaElement>(null);
+  const editorGutterRef = useRef<HTMLPreElement>(null);
+  const loadedSourceRef = useRef('');
+  const sourceDetails = sourceQ.data;
+  const debugMode = Boolean(projectQ.data?.debug_mode);
+  const isRunning = run?.status === 'queued' || run?.status === 'running';
+  const sourceDirty = Boolean(sourceDetails) && sourceDraft !== savedSource;
   const alarms = alarmQ.data?.items ?? [];
   const cfgFunctions = [...new Set((cfgQ.data?.nodes ?? []).map(node => node.function).filter((name): name is string => Boolean(name)))];
   const activeFunction = cfgFunctions.includes(selectedFunction) ? selectedFunction : cfgFunctions[0] ?? '';
@@ -155,17 +192,79 @@ function WorkbenchPage() {
   const cfgEdges = cfgQ.data?.edges?.filter(edge => !edge.function || edge.function === activeFunction) ?? [];
   const selectedState = stateQ.data?.items.find(s => s.block_id === selectedBlock && (!s.function || s.function === activeFunction));
   const highlightedLine = selectedLine ?? selectedAlarm?.location.line ?? null;
+  const sourceLineCount = Math.max(1, sourceDraft.split('\n').length);
+  const sourcePath = sourceDetails?.path ?? irQ.data?.file;
+
+  useEffect(() => {
+    if (!sourceDetails) return;
+    const sourceKey = `${sourceDetails.id}:${sourceDetails.sha256}`;
+    if (loadedSourceRef.current === sourceKey) return;
+    if (loadedSourceRef.current && sourceDraft !== savedSource) return;
+    loadedSourceRef.current = sourceKey;
+    setSourceDraft(sourceDetails.content);
+    setSavedSource(sourceDetails.content);
+  }, [sourceDetails, sourceDraft, savedSource]);
+
   useEffect(() => {
     if (!selectedBlock && cfgNodes[0]) setSelectedBlock(cfgNodes[0].id);
   }, [cfgNodes, selectedBlock]);
   useEffect(() => {
-    if (highlightedLine) sourceRef.current?.querySelector<HTMLElement>(`[data-line="${highlightedLine}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [highlightedLine]);
+    if (!highlightedLine || debugMode) return;
+    sourceRef.current?.querySelector<HTMLElement>(`[data-line="${highlightedLine}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [highlightedLine, debugMode]);
+
+  useRunEvents(runId, Boolean(isRunning), event => {
+    if (event.type === 'poll' || event.type === 'run.completed' || event.type === 'run.failed') {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['alarms', runId] }),
+        queryClient.invalidateQueries({ queryKey: ['diagnostics', runId] }),
+        queryClient.invalidateQueries({ queryKey: ['states', runId] }),
+        queryClient.invalidateQueries({ queryKey: ['ir', runId] }),
+        queryClient.invalidateQueries({ queryKey: ['cfg', runId] }),
+      ]);
+    }
+  });
+
   const chooseNode = (node: CfgNode) => { setSelectedBlock(node.id); setSelectedLine(node.sourceLines?.[0] ?? null); };
   const chooseAlarm = (alarm: Alarm) => { setSelectedAlarm(alarm); setSelectedDiagnosticId(null); setSelectedBlock(alarm.block_id); setSelectedFunction(alarm.function); setSelectedLine(alarm.location.line || null); };
   const chooseDiagnostic = (diagnostic: Diagnostic) => { setSelectedDiagnosticId(diagnostic.id); setSelectedLine(diagnostic.location?.line || null); };
   const selectFunction = (name: string) => { setSelectedFunction(name); const first = cfgQ.data?.nodes?.find(node => !node.function || node.function === name); setSelectedBlock(first?.id ?? ''); setSelectedLine(first?.sourceLines?.[0] ?? null); };
-  return <div className="workbench"><div className="workbench-toolbar"><Link className="back-link" to={`/runs/${runId}`}><ArrowLeft size={15} />运行详情</Link><div className="workbench-title"><Code2 size={17} /><b>分析工作台</b><span>/{irQ.data?.file}</span></div><div className="workbench-tools"><button className="icon-btn" aria-label="刷新" onClick={() => { void Promise.all([cfgQ.refetch(), irQ.refetch(), alarmQ.refetch(), stateQ.refetch()]); }}><RefreshCw size={16} /></button><button className="secondary-btn"><Upload size={15} />导出结果</button></div></div><ResizablePanes storageKey="tea121.workbench.pane-sizes"><section className="pane source-pane"><div className="pane-heading"><span><FileCode2 size={15} />源代码</span><small>{irQ.data?.file}</small></div><div className="code-view" ref={sourceRef}>{(irQ.data?.source ?? '').split('\n').map((line, index) => <div className={`code-line ${index + 1 === highlightedLine ? 'line-active' : ''}`} data-line={index + 1} key={index}><span className="line-no">{index + 1}</span><code>{line || ' '}</code></div>)}</div><div className="ir-block"><div className="pane-heading"><span><Terminal size={15} />LLVM IR</span><small>normalized.ll</small></div>{irQ.data?.instructions.map(i => <div className={`ir-line ${i.line === highlightedLine ? 'ir-active' : ''}`} key={i.id}><span>{i.id}</span><code>{i.text}</code></div>)}</div></section><section className="pane cfg-pane"><div className="pane-heading"><span><GitBranch size={15} />控制流图 <small>{cfgNodes.length} 个基本块</small></span>{cfgFunctions.length > 0 && <select className="mini-select" aria-label="选择函数" value={activeFunction} onChange={event => selectFunction(event.target.value)}>{cfgFunctions.map(name => <option key={name}>{name}</option>)}</select>}</div><CfgGraph nodes={cfgNodes} edges={cfgEdges} selected={selectedBlock} onSelect={chooseNode} /><div className="edge-legend"><span><i className="edge true" />true</span><span><i className="edge false" />false</span><span><i className="edge" />fallthrough</span><span><RotateCcw size={11} />回边 = 循环</span></div></section><section className="pane inspector-pane"><div className="inspector-tabs"><button className={tab === 'alarms' ? 'active' : ''} onClick={() => setTab('alarms')}><ShieldAlert size={15} />告警 <b>{alarms.length}</b></button><button className={tab === 'diagnostics' ? 'active' : ''} onClick={() => setTab('diagnostics')}><Terminal size={15} />诊断 <b>{diagQ.data?.total ?? 0}</b></button></div>{tab === 'alarms' ? <><AlarmTable alarms={alarms} onSelect={chooseAlarm} />{selectedAlarm ? <AlarmDetail alarm={selectedAlarm} /> : <EmptyState icon={<ShieldAlert />} title="选择一个告警" detail="从列表选择告警，查看边界证据和路径原因。" compact />}</> : <DiagnosticList items={diagQ.data?.items ?? []} selectedId={selectedDiagnosticId} onSelect={chooseDiagnostic} />}</section></ResizablePanes><details className="state-strip"><summary aria-label="切换 block state"><ChevronRight size={15} /></summary><div className="state-content"><div className="state-title"><Database size={15} /><b>{selectedState?.label ?? (selectedBlock || '未选择基本块')}</b><span>block state</span></div><div><small>ENTRY</small>{Object.entries(selectedState?.entry_state ?? {}).map(([key, value]) => <code key={key}>{key} = {value}</code>)}</div><ChevronRight size={16} /><div><small>EXIT</small>{Object.entries(selectedState?.exit_state ?? {}).map(([key, value]) => <code key={key}>{key} = {value}</code>)}</div></div></details></div>;
+  const syncEditorScroll = (event: React.UIEvent<HTMLTextAreaElement>) => { if (editorGutterRef.current) editorGutterRef.current.scrollTop = event.currentTarget.scrollTop; };
+  const rerunAnalysis = async () => {
+    if (!run || !sourceDetails || reanalyzing || isRunning) return;
+    setReanalyzing(true);
+    setAnalysisError('');
+    try {
+      const draft = sourceDraft;
+      let fileIds = [...run.file_ids];
+      if (sourceDirty) {
+        const revision = await api.updateSourceFile(run.project_id, sourceDetails.id, draft);
+        const fileIndex = fileIds.indexOf(sourceDetails.id);
+        if (fileIndex >= 0) fileIds[fileIndex] = revision.id;
+        else fileIds.push(revision.id);
+        setSavedSource(draft);
+        loadedSourceRef.current = `${revision.id}:${revision.sha256}`;
+      }
+      const next = await api.createRun(run.project_id, {
+        file_ids: fileIds,
+        detector_id: run.detector_id,
+        rule_pack_id: run.rule_pack_id,
+        detector_version: run.detector_version,
+        rule_pack_version: run.rule_pack_version,
+        mode: run.mode,
+        config: run.config,
+        cwe_id: run.cwe_scope[0],
+      });
+      await queryClient.invalidateQueries({ queryKey: ['runs', run.project_id] });
+      navigate(`/runs/${next.id}/workbench`, { replace: true });
+    } catch (error) {
+      setAnalysisError(error instanceof Error ? error.message : '重新分析失败，请稍后重试。');
+    } finally {
+      setReanalyzing(false);
+    }
+  };
+
+  return <div className="workbench"><div className="workbench-toolbar"><Link className="back-link" to={`/runs/${runId}`}><ArrowLeft size={15} />运行详情</Link><div className="workbench-title"><Code2 size={17} /><b>分析工作台</b><span>/{sourcePath}</span>{isRunning && <em className="analysis-running"><RefreshCw size={12} />正在分析</em>}</div><div className="workbench-tools">{analysisError && <span className="workbench-error" title={analysisError}>{analysisError}</span>}{debugMode && <><span className={`source-state ${sourceDirty ? 'dirty' : ''}`}>{sourceDirty ? '有未分析的修改' : '源码已同步'}</span><button className="icon-btn rerun-btn" aria-label="保存并重新分析" title="保存修改并重新分析" disabled={!sourceDetails || reanalyzing || isRunning} onClick={() => void rerunAnalysis()}><RotateCcw size={16} className={reanalyzing ? 'spin' : ''} /></button></>}<button className="secondary-btn"><Upload size={15} />导出结果</button></div></div><ResizablePanes storageKey="tea121.workbench.pane-sizes"><section className="pane source-pane"><div className="pane-heading"><span><FileCode2 size={15} />源代码</span><small>{debugMode ? '可编辑 · 保存后重新分析' : sourcePath}</small></div>{debugMode ? <div className="code-editor" ref={sourceRef}><pre className="code-editor-gutter" ref={editorGutterRef} aria-hidden="true">{Array.from({ length: sourceLineCount }, (_, index) => <span className={index + 1 === highlightedLine ? 'active' : ''} key={index}>{index + 1}</span>)}</pre><textarea ref={sourceEditorRef} aria-label="源代码编辑器" value={sourceDraft} onChange={event => setSourceDraft(event.target.value)} onScroll={syncEditorScroll} disabled={reanalyzing} spellCheck={false} wrap="off" /></div> : <div className="code-view" ref={sourceRef}>{(irQ.data?.source ?? '').split('\n').map((line, index) => <div className={`code-line ${index + 1 === highlightedLine ? 'line-active' : ''}`} data-line={index + 1} key={index}><span className="line-no">{index + 1}</span><code>{line || ' '}</code></div>)}</div>}<div className="ir-block"><div className="pane-heading"><span><Terminal size={15} />LLVM IR</span><small>normalized.ll</small></div>{irQ.data?.instructions.map(i => <div className={`ir-line ${i.line === highlightedLine ? 'ir-active' : ''}`} key={i.id}><span>{i.id}</span><code>{i.text}</code></div>)}</div></section><section className="pane cfg-pane"><div className="pane-heading"><span><GitBranch size={15} />控制流图 <small>{cfgNodes.length} 个基本块</small></span>{cfgFunctions.length > 0 && <select className="mini-select" aria-label="选择函数" value={activeFunction} onChange={event => selectFunction(event.target.value)}>{cfgFunctions.map(name => <option key={name}>{name}</option>)}</select>}</div><CfgGraph nodes={cfgNodes} edges={cfgEdges} selected={selectedBlock} onSelect={chooseNode} /><div className="edge-legend"><span><i className="edge true" />true</span><span><i className="edge false" />false</span><span><i className="edge" />fallthrough</span><span><RotateCcw size={11} />回边 = 循环</span></div></section><section className="pane inspector-pane"><div className="inspector-tabs"><button className={tab === 'alarms' ? 'active' : ''} onClick={() => setTab('alarms')}><ShieldAlert size={15} />告警 <b>{alarms.length}</b></button><button className={tab === 'diagnostics' ? 'active' : ''} onClick={() => setTab('diagnostics')}><Terminal size={15} />诊断 <b>{diagQ.data?.total ?? 0}</b></button></div>{tab === 'alarms' ? <><AlarmTable alarms={alarms} onSelect={chooseAlarm} />{selectedAlarm ? <AlarmDetail alarm={selectedAlarm} /> : <EmptyState icon={<ShieldAlert />} title="选择一个告警" detail="从列表选择告警，查看边界证据和路径原因。" compact />}</> : <DiagnosticList items={diagQ.data?.items ?? []} selectedId={selectedDiagnosticId} onSelect={chooseDiagnostic} />}</section></ResizablePanes><details className="state-strip"><summary aria-label="切换 block state"><ChevronRight size={15} /></summary><div className="state-content"><div className="state-title"><Database size={15} /><b>{selectedState?.label ?? (selectedBlock || '未选择基本块')}</b><span>block state</span></div><div><small>ENTRY</small>{Object.entries(selectedState?.entry_state ?? {}).map(([key, value]) => <code key={key}>{key} = {value}</code>)}</div><ChevronRight size={16} /><div><small>EXIT</small>{Object.entries(selectedState?.exit_state ?? {}).map(([key, value]) => <code key={key}>{key} = {value}</code>)}</div></div></details></div>;
 }
 
 export function AlarmDetail({ alarm }: { alarm: Alarm }) { return <div className="alarm-detail"><div className="detail-title"><SeverityBadge severity={alarm.severity} /><span>{alarm.cwe_id}</span></div><h3>{alarm.message}</h3><div className="alarm-meta"><span><b>Detector</b>{alarm.detector_id}</span><span><b>Rule pack</b>{alarm.rule_pack_id}</span><span><b>Family</b>{alarm.family}</span><span><b>Violation kind</b>{alarm.violation_kind}</span><span><b>Function</b>{alarm.function}</span></div><div className="evidence-grid"><div><small>OBJECT SIZE</small><strong>[{alarm.object_size.lower}, {alarm.object_size.upper}] bytes</strong></div><div><small>OFFSET RANGE</small><strong>[{alarm.offset.lower}, {alarm.offset.upper}] bytes</strong></div><div><small>ACCESS WIDTH</small><strong>{alarm.access_size_bytes} bytes</strong></div></div><div className="condition"><small>SAFE CONDITION</small><code>{alarm.safe_condition}</code></div><div className="reasons"><small>WHY THIS IS A VIOLATION</small>{alarm.reason.map((reason, i) => <div key={reason}><span>{i + 1}</span>{reason}</div>)}</div><div className="raw-ir"><small>RAW IR</small><code>{alarm.instruction}</code><span>{alarm.location.file}:{alarm.location.line}:{alarm.location.column}</span></div></div>; }

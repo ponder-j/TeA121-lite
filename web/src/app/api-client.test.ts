@@ -18,6 +18,20 @@ describe('mock api contract flows', () => {
     expect(uploaded.path).toBe('test.c');
   });
 
+  it('creates a blank debug source and stores an edited revision in mock mode', async () => {
+    const project = await api.createProject({ name: 'Debug API test project', debug_mode: true });
+    const files = await api.listProjectFiles(project.id);
+    expect(project.debug_mode).toBe(true);
+    expect(files.total).toBe(1);
+    expect(files.items[0].path).toBe('blank.c');
+
+    const blank = await api.getSourceFile(project.id, files.items[0].id);
+    expect(blank.content).toBe('');
+    const edited = await api.updateSourceFile(project.id, blank.id, 'int main(void) { return 0; }\n');
+    expect(edited.id).not.toBe(blank.id);
+    expect(edited.content).toContain('return 0');
+  });
+
   it('deletes a project in mock mode', async () => {
     const project = await api.createProject({ name: 'Delete API test project' });
     await api.deleteProject(project.id);
@@ -26,8 +40,9 @@ describe('mock api contract flows', () => {
   });
 
   it('normalizes nullable contract fields for the workbench', () => {
-    const project = adaptProject({ id: 'p', name: 'demo', description: null, created_at: '2026-09-06T00:00:00Z' });
+    const project = adaptProject({ id: 'p', name: 'demo', description: null, debug_mode: true, created_at: '2026-09-06T00:00:00Z' });
     expect(project.description).toBe('');
+    expect(project.debug_mode).toBe(true);
     expect(project.updated_at).toContain('2026-09-06');
     const alarm = adaptAlarm({ id: 'a', run_id: 'r', alarm_key: 'k', detector_id: 'd', detector_version: '1', rule_pack_id: 'rp', rule_pack_version: '1', cwe_id: 'CWE-121', family: null, violation_kind: 'copy_length_overflow', severity: 'possible', function_name: null, block_id: null, instruction_id: null, instruction_text: null, source_file_id: null, source_line: null, memory_object_id: 'obj', object_name: null, object_size: { lower: null, upper: null, is_bottom: false }, offset: { lower: null, upper: null, is_bottom: false }, access_size_bytes: 1, safe_condition: 'safe', message: 'm', reason: [] });
     expect(alarm.function).toBe('unknown');
