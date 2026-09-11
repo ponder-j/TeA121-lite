@@ -97,3 +97,67 @@ class State:
         joined = self.join(other)
         ints = {k: self.integers.get(k, Interval.top()).widen(joined.integers.get(k, Interval.top())) for k in joined.integers}
         return replace(joined, integers=ints)
+
+    def narrow(self, other: "State") -> "State":
+        """Intersect abstract components after a widening phase.
+
+        Both operands must over-approximate the same concrete block state.
+        Intersecting them is therefore sound and can recover finite interval
+        bounds produced by branch guards.
+        """
+        if not self.reachable or not other.reachable:
+            return State.unreachable()
+
+        keys = self.integers.keys() | other.integers.keys()
+        ints = {
+            key: self.integers.get(key, Interval.top()).narrow(other.integers.get(key, Interval.top()))
+            for key in keys
+        }
+        if any(value.bottom for value in ints.values()):
+            return State.unreachable()
+
+        pointers = dict(self.pointers)
+        for key in self.pointers.keys() & other.pointers.keys():
+            left, right = self.pointers[key], other.pointers[key]
+            if left.unknown_base:
+                pointers[key] = right
+            elif right.unknown_base:
+                pointers[key] = left
+            else:
+                bases = left.bases & right.bases
+                offset = left.offset_bytes.narrow(right.offset_bytes)
+                if offset.bottom or not bases:
+                    return State.unreachable()
+                pointers[key] = PointerValue(bases, offset, False)
+
+        objects = dict(self.memory_objects)
+        for key in self.memory_objects.keys() & other.memory_objects.keys():
+            left, right = self.memory_objects[key], other.memory_objects[key]
+            size = left.size_bytes.narrow(right.size_bytes)
+            if size.bottom:
+                return State.unreachable()
+            objects[key] = replace(left, size_bytes=size, escaped=left.escaped and right.escaped)
+
+        strings = {
+            key: self.string_lengths.get(key, Interval.top()).narrow(other.string_lengths.get(key, Interval.top()))
+            for key in self.string_lengths.keys() | other.string_lengths.keys()
+        }
+        if any(value.bottom for value in strings.values()):
+            return State.unreachable()
+
+        scalar_memory = {
+            key: self.scalar_memory.get(key, Interval.top()).narrow(other.scalar_memory.get(key, Interval.top()))
+            for key in self.scalar_memory.keys() | other.scalar_memory.keys()
+        }
+        if any(value.bottom for value in scalar_memory.values()):
+            return State.unreachable()
+
+        return State(
+            ints,
+            pointers,
+            objects,
+            strings,
+            True,
+            tuple(dict.fromkeys(self.reasons + other.reasons)),
+            scalar_memory,
+        )

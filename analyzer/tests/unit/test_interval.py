@@ -14,6 +14,17 @@ def test_bottom_top_are_distinct():
     assert Interval.bottom_value().join(Interval.const(1)) == Interval.const(1)
 
 
+def test_narrow_recovers_finite_bounds_from_widened_top():
+    assert Interval(0, None).narrow(Interval.range(0, 9)) == Interval.range(0, 9)
+    assert Interval.top().narrow(Interval.range(2, 4)) == Interval.range(2, 4)
+
+
+def test_open_interval_arithmetic_preserves_single_sided_bounds():
+    assert Interval(None, 9).add(Interval.const(1)) == Interval(None, 10)
+    assert Interval(None, 9).mul(Interval.const(4)) == Interval(None, 36)
+    assert Interval(None, 9).mul(Interval.const(-4)) == Interval(-36, None)
+
+
 def test_overflow_loses_precision():
     assert Interval.const(127).add(Interval.const(1), bits=8, signed=True).is_top
 

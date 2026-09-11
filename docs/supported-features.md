@@ -3,12 +3,12 @@
 | Feature | Status | Notes |
 | --- | --- | --- |
 | MiniIR JSON 1.0.0 loading | supported | Schema checked before analysis |
-| Interval join/meet/widen | supported | Fixed-width overflow degrades to Top |
+| Interval join/meet/widen/narrow | supported | Single-sided infinities are preserved; fixed-width overflow degrades to Top |
 | Typed integer overflow (CWE-190) | supported | `add`/`sub`/`mul` whose result provably leaves the type range emit an alarm; signed 8/16/32/64-bit by default |
 | alloca, GEP, load, store | supported | Byte offsets and stack object evidence |
 | Scalar store/load summaries | partial | Constant values tracked by object and byte offset; joins remain conservative |
-| icmp branch refinement | supported | Explicit comparison terminator metadata |
-| phi/select and worklist CFG | supported | Loop widening after configurable iterations |
+| icmp branch refinement | supported | All signed/unsigned ordering predicates, both true and false edges, variables and constants |
+| phi/select and worklist CFG | supported | Edge-sensitive PHI, loop widening, bounded narrowing, and alarm replay on the final fixed point |
 | memcpy/memmove/memset/strncpy | supported | Unknown lengths are conservative |
 | strcpy | supported | Exact only with a known source string length |
 | fgets/recv input writes | partial | Constant maximum count is checked; unknown bounds remain unsupported |

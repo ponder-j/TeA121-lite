@@ -13,7 +13,8 @@ PYTHONPATH=analyzer/src python3 -m tea121 analyze analyzer/tests/fixtures/miniir
 ```
 
 The normal result includes CFG and block entry/exit states. Add `--mode trace`
-to include per-instruction state transitions. C/LLVM inputs also include the
+to include per-instruction state transitions on the final narrowed fixed point.
+C/LLVM inputs also include the
 normalized LLVM IR and its SHA-256 as an artifact for backend/workbench use.
 A missing LLVM toolchain is
 reported as `unsupported` by `tools/compile_case.py`; no shell command is
@@ -78,3 +79,9 @@ sorted even when case subprocesses run concurrently.
 results from observational calls such as `atoi`, `strlen`, and `rand` are
 propagated as exact summaries when available or `Top` otherwise. Unknown
 instructions/calls create diagnostics rather than being treated as clean.
+
+Control-flow analysis supports edge-sensitive PHI values, all signed/unsigned
+`icmp` predicates on both branch polarities, bounded narrowing after loop
+widening, and single-sided interval arithmetic. Access checks are replayed on
+the final stable state so intermediate widen-to-`Top` states do not leave stale
+alarms.

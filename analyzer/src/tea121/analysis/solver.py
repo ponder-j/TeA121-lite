@@ -21,6 +21,7 @@ from .models import (
 @dataclass(frozen=True)
 class AnalysisConfig:
     widen_after: int = 3
+    narrowing_rounds: int = 1
     mode: str = "normal"
     max_call_depth: int = 8
     models: tuple[str, ...] = ("memcpy", "memmove", "memset", "strcpy", "strncpy")
@@ -59,6 +60,9 @@ class AnalysisEngine:
         self._summaries: dict[tuple[str, tuple[str, ...]], FunctionSummary] = {}
         self._emitted_cfg_nodes: set[tuple[str, str]] = set()
         self._emitted_alarm_keys: set[str] = set()
+        # Worklist iterations compute states first; effects are replayed once on
+        # the narrowed fixed point so stale intermediate alarms cannot survive.
+        self._record_effects = True
         self._global_objects = {
             str(item["id"]): MemoryObject(str(item["id"]), Interval.const(int(item.get("size_bytes", 0))), {"kind": "global"})
             for item in module.get("globals", [])
@@ -139,64 +143,171 @@ class AnalysisEngine:
         entry_states[entry] = initial_state or self._initial_state()
         queue = [entry]
         visits: dict[str, int] = {bid: 0 for bid in by_id}
-        while queue:
-            bid = queue.pop(0)
-            block = by_id[bid]
-            if bid != entry:
-                incoming = [self._edge_state(exit_states[p], by_id[p].get("terminator", {}), bid) for p in predecessors[bid]]
-                state = State.unreachable()
-                for candidate in incoming:
-                    state = state.join(candidate)
-                if state == entry_states[bid] and state.reachable:
+        widened: set[str] = set()
+        record_effects = self._record_effects
+        self._record_effects = False
+        try:
+            while queue:
+                bid = queue.pop(0)
+                block = by_id[bid]
+                incoming_states: dict[str, State] | None = None
+                if bid != entry:
+                    state, incoming_states = self._block_input_state(bid, entry, by_id, predecessors, entry_states, exit_states)
+                    if state == entry_states[bid] and state.reachable:
+                        continue
+                    entry_states[bid] = state
+                state = entry_states[bid]
+                visits[bid] += 1
+                new_state = self._transfer_block(function, block, state, call_stack, incoming_states)
+                if visits[bid] > self.config.widen_after:
+                    new_state = exit_states[bid].widen(new_state)
+                    widened.add(bid)
+                if new_state == exit_states[bid] and visits[bid] > 1:
                     continue
-                entry_states[bid] = state
-            state = entry_states[bid]
-            visits[bid] += 1
-            new_state = self._transfer_block(function, block, state, call_stack)
-            if visits[bid] > self.config.widen_after:
-                new_state = exit_states[bid].widen(new_state)
-            if new_state == exit_states[bid] and visits[bid] > 1:
-                continue
-            exit_states[bid] = new_state
-            queue.extend(target for target in successors[bid] if target in by_id and target not in queue)
+                exit_states[bid] = new_state
+                queue.extend(target for target in successors[bid] if target in by_id and target not in queue)
+
+            if widened and self.config.narrowing_rounds > 0:
+                self._narrow_states(function, by_id, predecessors, entry, entry_states, exit_states, call_stack)
+
+            returned = State.unreachable()
+            for bid, block in by_id.items():
+                if block.get("terminator", {}).get("op") == "ret":
+                    returned = returned.join(exit_states[bid])
+            value = None
+            for block in blocks:
+                if block.get("terminator", {}).get("op") == "ret" and block["terminator"].get("value") is not None:
+                    value = block["terminator"]["value"]
+                    break
+            if value is None:
+                summary = FunctionSummary()
+            elif value in returned.pointers:
+                summary = FunctionSummary(return_pointer=returned.pointers[value])
+            else:
+                summary = FunctionSummary(return_interval=returned.get_int(value))
+        finally:
+            self._record_effects = record_effects
+
+        if record_effects:
+            # Replay only on the final states. In particular, an alarm seen
+            # while the loop head was temporarily widened to Top must not leak
+            # into the result if narrowing later proves the access safe.
+            self._record_effects = True
+            try:
+                for bid in by_id:
+                    if not entry_states[bid].reachable:
+                        continue
+                    _, incoming_states = self._block_input_state(bid, entry, by_id, predecessors, entry_states, exit_states)
+                    self._transfer_block(function, by_id[bid], entry_states[bid], call_stack, incoming_states)
+            finally:
+                self._record_effects = record_effects
+
         for bid in by_id:
             self.output.block_states.append({"function_name": function.get("name", ""), "block_id": bid, "entry_state": _state_json(entry_states[bid]), "exit_state": _state_json(exit_states[bid])})
-        returned = State.unreachable()
-        for bid, block in by_id.items():
-            if block.get("terminator", {}).get("op") == "ret": returned = returned.join(exit_states[bid])
-        value = None
-        for block in blocks:
-            if block.get("terminator", {}).get("op") == "ret" and block["terminator"].get("value") is not None:
-                value = block["terminator"]["value"]
-                break
-        if value is None: return FunctionSummary()
-        if value in returned.pointers: return FunctionSummary(return_pointer=returned.pointers[value])
-        return FunctionSummary(return_interval=returned.get_int(value))
+        return summary
+
+    def _block_input_state(
+        self,
+        bid: str,
+        entry: str,
+        by_id: dict[str, dict[str, Any]],
+        predecessors: dict[str, list[str]],
+        entry_states: dict[str, State],
+        exit_states: dict[str, State],
+    ) -> tuple[State, dict[str, State] | None]:
+        if bid == entry:
+            return entry_states[bid], None
+        incoming_states: dict[str, State] = {}
+        state = State.unreachable()
+        for predecessor in predecessors[bid]:
+            edge_state = self._edge_state(exit_states[predecessor], by_id[predecessor].get("terminator", {}), bid)
+            if edge_state.reachable:
+                incoming_states[predecessor] = edge_state
+                state = state.join(edge_state)
+        return state, incoming_states
+
+    def _narrow_states(
+        self,
+        function: dict[str, Any],
+        by_id: dict[str, dict[str, Any]],
+        predecessors: dict[str, list[str]],
+        entry: str,
+        entry_states: dict[str, State],
+        exit_states: dict[str, State],
+        call_stack: tuple[str, ...],
+    ) -> None:
+        """Run a bounded narrowing phase after interval widening.
+
+        Each pass is a meet-only update, so states can only shrink and the
+        phase terminates. Repeating passes within one configured round lets a
+        narrowed loop head propagate its recovered bounds around the backedge.
+        """
+        order = [bid for bid in reversed(list(by_id)) if bid != entry]
+        for _ in range(max(1, self.config.narrowing_rounds)):
+            for _pass in range(len(order) + 2):
+                changed = False
+                for bid in order:
+                    state, incoming_states = self._block_input_state(bid, entry, by_id, predecessors, entry_states, exit_states)
+                    narrowed_entry = entry_states[bid].narrow(state)
+                    if narrowed_entry != entry_states[bid]:
+                        entry_states[bid] = narrowed_entry
+                        changed = True
+                    if not narrowed_entry.reachable:
+                        if exit_states[bid].reachable:
+                            exit_states[bid] = State.unreachable()
+                            changed = True
+                        continue
+                    new_state = self._transfer_block(function, by_id[bid], narrowed_entry, call_stack, incoming_states)
+                    narrowed_exit = exit_states[bid].narrow(new_state)
+                    if narrowed_exit != exit_states[bid]:
+                        exit_states[bid] = narrowed_exit
+                        changed = True
+                if not changed:
+                    break
 
     def _edge_state(self, state: State, term: dict[str, Any], target: str) -> State:
         if not state.reachable or term.get("op") != "br" or "condition" not in term:
+            return state
+        if target == str(term.get("true")):
+            truth = True
+        elif target == str(term.get("false")):
+            truth = False
+        else:
             return state
         condition = term["condition"]
         cmp = state.get_int(condition) if isinstance(condition, (int, str)) else Interval.top()
         # A branch condition can be represented as a comparison result with metadata.
         if isinstance(condition, dict) and condition.get("op") == "icmp":
             left, right = state.get_int(condition.get("left")), state.get_int(condition.get("right"))
-            return _refine_cmp(state, condition.get("predicate", "eq"), left, right, target == str(term.get("true")), condition.get("left"), condition.get("right"))
+            return _refine_cmp(state, condition.get("predicate", "eq"), left, right, truth, condition.get("left"), condition.get("right"))
         if isinstance(condition, str) and condition in state.integers:
-            if target == str(term.get("true")):
-                return state.with_int(condition, cmp.meet(Interval(1, None)))
-            return state.with_int(condition, cmp.meet(Interval(None, 0)))
+            return _refine_name(state, condition, cmp.meet(Interval(1, None) if truth else Interval(None, 0)))
         return state
 
-    def _transfer_block(self, function: dict[str, Any], block: dict[str, Any], state: State, call_stack: tuple[str, ...]) -> State:
+    def _transfer_block(
+        self,
+        function: dict[str, Any],
+        block: dict[str, Any],
+        state: State,
+        call_stack: tuple[str, ...],
+        incoming_states: dict[str, State] | None = None,
+    ) -> State:
         for instruction in block.get("instructions", []):
             before = state
-            state = self._transfer(instruction, state, function, block, call_stack)
-            if self.config.mode == "trace":
+            state = self._transfer(instruction, state, function, block, call_stack, incoming_states)
+            if self._record_effects and self.config.mode == "trace":
                 self.output.trace.append({"sequence_no": len(self.output.trace), "event_type": "instruction", "function_name": function.get("name", ""), "block_id": block.get("id"), "instruction_id": instruction.get("id"), "before_state": _state_json(before), "after_state": _state_json(state), "explanation": instruction.get("op", "")})
         return state
 
-    def _transfer(self, inst: dict[str, Any], state: State, function: dict[str, Any], block: dict[str, Any], call_stack: tuple[str, ...]) -> State:
+    def _transfer(
+        self,
+        inst: dict[str, Any],
+        state: State,
+        function: dict[str, Any],
+        block: dict[str, Any],
+        call_stack: tuple[str, ...],
+        incoming_states: dict[str, State] | None = None,
+    ) -> State:
         op, result = inst.get("op"), inst.get("result")
         if op in {"const", "constant"} and result:
             return state.with_int(result, Interval.const(int(inst.get("value", 0))))
@@ -213,7 +324,12 @@ class AnalysisEngine:
         if op == "phi" and result:
             value = Interval.bottom_value()
             for incoming in inst.get("incoming", []):
-                value = value.join(state.get_int(incoming.get("value")))
+                predecessor = str(incoming.get("block", ""))
+                edge_state = incoming_states.get(predecessor) if incoming_states is not None else None
+                if edge_state is not None and edge_state.reachable:
+                    value = value.join(edge_state.get_int(incoming.get("value")))
+                elif incoming_states is None:
+                    value = value.join(state.get_int(incoming.get("value")))
             return state.with_int(result, value)
         if op == "select" and result:
             return state.with_int(result, state.get_int(inst.get("true_value")).join(state.get_int(inst.get("false_value"))))
@@ -289,6 +405,8 @@ class AnalysisEngine:
         self._emit_overflow_alarm(inst, value, bits, signed, function, block, result, source="computed value range")
 
     def _emit_overflow_alarm(self, inst, value, bits, signed, function, block, name, *, source):
+        if not self._record_effects:
+            return
         kind = value.overflow_kind(bits, signed)
         if kind is None:
             return
@@ -337,6 +455,8 @@ class AnalysisEngine:
         )
 
     def _check_access(self, inst, pointer, width, state, function, block, write):
+        if not self._record_effects:
+            return
         if pointer.unknown_base or not pointer.bases:
             self._diagnostic("UNKNOWN_BASE", "pointer base cannot be resolved", "unknown_effect", inst, function, block, "access may refer to an unknown object")
             return
@@ -387,7 +507,10 @@ class AnalysisEngine:
                     callee_state = callee_state.with_int(parameter, state.get_int(argument))
             key = (name, f"{function.get('name', '')}:{inst.get('id', '')}")
             summary = self._summaries.get(key)
-            if summary is None:
+            # During the final effect replay, revisit user calls instead of
+            # reusing the silent summary from the state-only worklist. This
+            # records alarms/diagnostics produced inside callees as well.
+            if summary is None or self._record_effects:
                 summary = self._analyze_function(callee, callee_state, call_stack + (name,))
                 self._summaries[key] = summary
             if result and summary.return_pointer is not None:
@@ -505,33 +628,135 @@ class AnalysisEngine:
         return State(pointers=pointers, memory_objects=dict(self._global_objects), string_lengths=dict(self._global_strings))
 
     def _diagnostic(self, code, message, severity, inst, function, block, impact):
+        if not self._record_effects:
+            return
         self.output.diagnostics.append({"diagnostic_id": f"d-{len(self.output.diagnostics)+1}", "code": code, "severity": severity, "message": message, "impact": impact, "function_name": function.get("name", ""), "block_id": block.get("id"), "instruction_id": inst.get("id"), "location": inst.get("location")})
 
 
 def _comparison_interval(predicate: str, left: Interval, right: Interval) -> Interval:
-    if predicate in {"eq", "ne"} and left.is_singleton and right.is_singleton:
-        value = int((left.lower == right.lower) if predicate == "eq" else (left.lower != right.lower))
-        return Interval.const(value)
-    if predicate in {"slt", "ult", "lt"} and left.upper is not None and right.lower is not None and left.upper < right.lower:
-        return Interval.const(1)
-    if predicate in {"sge", "uge", "ge"} and left.lower is not None and right.upper is not None and left.lower >= right.upper:
-        return Interval.const(1)
+    if left.bottom or right.bottom:
+        return Interval.bottom_value()
+    relation = predicate[1:] if predicate[:1] in {"s", "u"} else predicate
+    if relation == "eq":
+        if left.is_singleton and right.is_singleton:
+            return Interval.const(int(left.lower == right.lower))
+        if _intervals_disjoint(left, right):
+            return Interval.const(0)
+    elif relation == "ne":
+        if left.is_singleton and right.is_singleton:
+            return Interval.const(int(left.lower != right.lower))
+        if _intervals_disjoint(left, right):
+            return Interval.const(1)
+    elif relation == "lt":
+        if left.upper is not None and right.lower is not None and left.upper < right.lower:
+            return Interval.const(1)
+        if left.lower is not None and right.upper is not None and left.lower >= right.upper:
+            return Interval.const(0)
+    elif relation == "le":
+        if left.upper is not None and right.lower is not None and left.upper <= right.lower:
+            return Interval.const(1)
+        if left.lower is not None and right.upper is not None and left.lower > right.upper:
+            return Interval.const(0)
+    elif relation == "gt":
+        if left.lower is not None and right.upper is not None and left.lower > right.upper:
+            return Interval.const(1)
+        if left.upper is not None and right.lower is not None and left.upper <= right.lower:
+            return Interval.const(0)
+    elif relation == "ge":
+        if left.lower is not None and right.upper is not None and left.lower >= right.upper:
+            return Interval.const(1)
+        if left.upper is not None and right.lower is not None and left.upper < right.lower:
+            return Interval.const(0)
     return Interval(0, 1)
 
 
 def _refine_cmp(state, predicate, left, right, truth, left_name, right_name):
-    if not isinstance(left_name, str) or not isinstance(right_name, str):
-        return state
-    if predicate in {"slt", "ult", "lt"}:
-        if truth:
-            return state.with_int(left_name, left.refine_upper((right.upper - 1) if right.upper is not None else left.upper or 0)).with_int(right_name, right.refine_lower((left.lower + 1) if left.lower is not None else right.lower or 0))
-        return state
-    if predicate in {"sge", "uge", "ge"} and truth and right.lower is not None:
-        return state.with_int(left_name, left.refine_lower(right.lower))
-    if predicate in {"eq"} and truth:
+    predicate = str(predicate)
+    outcome = _comparison_interval(predicate, left, right)
+    if outcome.is_singleton and outcome.lower != int(truth):
+        return State.unreachable()
+    if not truth:
+        predicate = _negate_predicate(predicate)
+    relation = predicate[1:] if predicate[:1] in {"s", "u"} else predicate
+    left_var = isinstance(left_name, str) and left_name in state.integers
+    right_var = isinstance(right_name, str) and right_name in state.integers
+
+    if relation == "eq":
         common = left.meet(right)
-        return state.with_int(left_name, common).with_int(right_name, common)
+        if common.bottom:
+            return State.unreachable()
+        if left_var:
+            state = _refine_name(state, left_name, common)
+        if right_var:
+            state = _refine_name(state, right_name, common)
+        return state
+    if relation == "ne":
+        if left.is_singleton and right.is_singleton and left.lower == right.lower:
+            return State.unreachable()
+        if left_var and right.is_singleton:
+            state = _refine_name(state, left_name, _exclude_value(left, right.lower))
+        if right_var and left.is_singleton:
+            state = _refine_name(state, right_name, _exclude_value(right, left.lower))
+        return state
+    if relation not in {"lt", "le", "gt", "ge"}:
+        return state
+
+    if relation in {"lt", "le"}:
+        if left_var and right.upper is not None:
+            upper = right.upper - (1 if relation == "lt" else 0)
+            state = _refine_name(state, left_name, Interval(None, upper))
+        if right_var and left.lower is not None:
+            lower = left.lower + (1 if relation == "lt" else 0)
+            state = _refine_name(state, right_name, Interval(lower, None))
+    else:
+        if left_var and right.lower is not None:
+            lower = right.lower + (1 if relation == "gt" else 0)
+            state = _refine_name(state, left_name, Interval(lower, None))
+        if right_var and left.upper is not None:
+            upper = left.upper - (1 if relation == "gt" else 0)
+            state = _refine_name(state, right_name, Interval(None, upper))
     return state
+
+
+def _negate_predicate(predicate: str) -> str:
+    relation = predicate[1:] if predicate[:1] in {"s", "u"} else predicate
+    prefix = predicate[:1] if predicate[:1] in {"s", "u"} else ""
+    negated = {
+        "eq": "ne",
+        "ne": "eq",
+        "lt": "ge",
+        "le": "gt",
+        "gt": "le",
+        "ge": "lt",
+    }.get(relation, relation)
+    return prefix + negated
+
+
+def _refine_name(state: State, name: str, constraint: Interval) -> State:
+    if name not in state.integers:
+        return state
+    refined = state.get_int(name).meet(constraint)
+    if refined.bottom:
+        return State.unreachable()
+    return state.with_int(name, refined)
+
+
+def _exclude_value(interval: Interval, value: int | None) -> Interval:
+    if value is None or interval.bottom or not interval.contains(value):
+        return interval
+    if interval.is_singleton:
+        return Interval.bottom_value()
+    if interval.lower == value:
+        return Interval(value + 1, interval.upper)
+    if interval.upper == value:
+        return Interval(interval.lower, value - 1)
+    return interval
+
+
+def _intervals_disjoint(left: Interval, right: Interval) -> bool:
+    if left.bottom or right.bottom:
+        return True
+    return (left.upper is not None and right.lower is not None and left.upper < right.lower) or (right.upper is not None and left.lower is not None and right.upper < left.lower)
 
 
 def _interval_json(value: Interval) -> dict[str, Any]:

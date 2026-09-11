@@ -52,7 +52,8 @@ static std::string predicate(ICmpInst::Predicate pred) {
 }
 
 static json::Object instruction(const Instruction &inst, const DataLayout &layout,
-                                const DenseMap<const Value *, std::string> &names) {
+                                const DenseMap<const Value *, std::string> &names,
+                                const DenseMap<const BasicBlock *, std::string> &blocks) {
   json::Object out;
   out["id"] = names.lookup(&inst);
   out["text"] = "";
@@ -109,7 +110,7 @@ static json::Object instruction(const Instruction &inst, const DataLayout &layou
     for (unsigned index = 0; index < phi->getNumIncomingValues(); ++index) {
       json::Object item;
       item["value"] = ref(phi->getIncomingValue(index), names);
-      item["block"] = blockName(*phi->getIncomingBlock(index), 0);
+      item["block"] = blocks.lookup(phi->getIncomingBlock(index));
       incoming.push_back(std::move(item));
     }
     out["incoming"] = std::move(incoming);
@@ -215,7 +216,7 @@ int main(int argc, char **argv) {
       value["id"] = names.lookup(&block);
       json::Array instructions;
       for (const Instruction &inst : block) {
-        if (!inst.isTerminator()) instructions.push_back(instruction(inst, layout, values));
+        if (!inst.isTerminator()) instructions.push_back(instruction(inst, layout, values, names));
       }
       value["instructions"] = std::move(instructions);
       value["terminator"] = terminator(block, names, values);
