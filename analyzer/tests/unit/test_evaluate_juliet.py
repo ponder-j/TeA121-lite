@@ -66,3 +66,53 @@ def test_pair_matrix_and_conservative_summary():
     assert summary["effective_bad_recall"] == 0.5
     assert summary["effective_good_silence_rate"] == 1.0
     assert summary["conservative_pair_accuracy"] == summary["pair_accuracy"] == 0.333333
+
+
+def test_batch_suite_discovery_and_case_collection(tmp_path):
+    from evaluate_cwe121 import collect_cases, discover_suites
+
+    cwe = tmp_path / "testcases" / "CWE121_Stack_Based_Buffer_Overflow"
+    for suite in ("s01", "s02", "s03"):
+        directory = cwe / suite
+        directory.mkdir(parents=True)
+        touch_case(directory, f"CWE121_Stack_Based_Buffer_Overflow__CWE131_memcpy_{suite[1:]}.c")
+
+    suites = discover_suites(tmp_path / "testcases")
+    assert [suite.name for suite in suites] == ["s01", "s02", "s03"]
+    assert [suite.name for suite in discover_suites(cwe, ["s02"])] == ["s02"]
+    collected = collect_cases(suites, "02")
+    assert [(suite, case.variant) for suite, case in collected] == [("s02", "02")]
+
+
+def test_batch_summary_reports_binary_confusion_and_suites():
+    from evaluate_cwe121 import score_summary
+
+    def case(suite: str, bad: str, good: str) -> dict:
+        return {
+            "suite": suite,
+            "family": "family",
+            "variant": "01",
+            "bad": {"outcome": bad},
+            "good": {"outcome": good},
+            "classification": classify_pair(bad, good),
+        }
+
+    cases = [
+        case("s01", "alarm", "clean"),
+        case("s01", "clean", "clean"),
+        case("s02", "alarm", "alarm"),
+        case("s02", "unsupported", "unsupported"),
+    ]
+    summary = score_summary(cases)
+    assert summary["binary_confusion"] == {
+        "tp": 2,
+        "fp": 1,
+        "fn": 1,
+        "tn": 2,
+        "unsupported": 2,
+        "error": 0,
+    }
+    assert summary["binary_metrics"]["supported_recall"] == 0.666667
+    assert summary["binary_metrics"]["supported_specificity"] == 0.666667
+    assert summary["by_suite"]["s01"]["binary_confusion"]["tp"] == 1
+    assert summary["by_suite"]["s02"]["binary_confusion"]["unsupported"] == 2

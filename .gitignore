@@ -5,6 +5,10 @@
 # 第三方 Juliet 测试集（内含独立 Git 仓库，整体忽略）
 juliet测试集/
 
+# 本地挂载/解压的 Juliet 评测语料
+tests/testcases/
+tests/testcasesupport/
+
 # 前端依赖与构建/测试产物
 web/node_modules/
 web/dist/

@@ -71,6 +71,21 @@ For a full local s01 run on the configured 18-core machine, use
 restrict the wrapper to one flow variant. Results remain deterministically
 sorted even when case subprocesses run concurrently.
 
+### Full CWE-121 batch evaluation
+
+`evaluate_cwe121.py` discovers every `sNN` suite and aggregates TP/FP/FN/TN,
+supported-only recall/specificity, and per-suite/family matrices. The Docker
+wrapper defaults to the dataset checked out under `tests/testcases`:
+
+```bash
+TEA121_JOBS=18 scripts/docker-evaluate-cwe121.sh
+# optional deterministic subset:
+TEA121_SUITE=s01,s02 TEA121_FLOW=01 TEA121_LIMIT=20   scripts/docker-evaluate-cwe121.sh
+```
+
+Outputs default to `analysis-output/juliet-cwe121-all.json` and `.csv`. The
+CSV keeps the per-case outcome plus diagnostic codes for failure triage.
+
 ## Supported MiniIR operations
 
 `const`, `add`, `sub`, `mul`, `icmp`, `phi`, `select`, `alloca`, `gep`,
