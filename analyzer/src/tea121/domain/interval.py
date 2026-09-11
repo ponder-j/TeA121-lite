@@ -62,8 +62,10 @@ class Interval:
             return other
         if other.bottom:
             return self
-        lower = self.lower if other.lower is None else other.lower if self.lower is None else min(self.lower, other.lower)
-        upper = self.upper if other.upper is None else other.upper if self.upper is None else max(self.upper, other.upper)
+        if self.is_top or other.is_top:
+            return Interval.top()
+        lower = min(self.lower, other.lower) if self.lower is not None and other.lower is not None else None
+        upper = max(self.upper, other.upper) if self.upper is not None and other.upper is not None else None
         return Interval(lower, upper)
 
     def meet(self, other: "Interval") -> "Interval":
@@ -116,6 +118,42 @@ class Interval:
     def refine_upper(self, value: int) -> "Interval":
         return self.meet(Interval(None, value))
 
+    @classmethod
+    def type_range(cls, bits: int, signed: bool = True) -> "Interval":
+        """Representable range of a ``bits``-wide integer type.
+
+        ``signed`` selects the two's-complement signed range (for example
+        ``[-128, 127]`` for 8 bits) or the unsigned range (``[0, 255]``).
+        A non-positive width has no usable range and degrades to Top.
+        """
+        if bits <= 0:
+            return cls.top()
+        if signed:
+            return cls(-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
+        return cls(0, (1 << bits) - 1)
+
+    def overflow_kind(self, bits: int, signed: bool = True) -> Optional[str]:
+        """Classify how ``self`` relates to a fixed-width integer range.
+
+        Returns ``"definite"`` when every value in the interval lies outside
+        the type range (a guaranteed overflow/underflow), ``"possible"`` when
+        the interval straddles a bound (only some values overflow), and
+        ``None`` when no overflow is provable (including Top and Bottom).
+        """
+        if self.bottom or bits <= 0:
+            return None
+        limits = Interval.type_range(bits, signed)
+        low, high = limits.lower, limits.upper
+        if self.upper is not None and self.upper < low:
+            return "definite"
+        if self.lower is not None and self.lower > high:
+            return "definite"
+        lower_outside = self.lower is not None and self.lower < low
+        upper_outside = self.upper is not None and self.upper > high
+        if lower_outside or upper_outside:
+            return "possible"
+        return None
+
     def _arithmetic(self, other: "Interval", operation, *, bits: int | None, signed: bool) -> "Interval":
         if self.bottom or other.bottom:
             return Interval.bottom_value()
@@ -127,10 +165,8 @@ class Interval:
     def _bounded(lower: int, upper: int, bits: int | None, signed: bool) -> "Interval":
         if bits is None:
             return Interval(lower, upper)
-        if signed:
-            lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
-        else:
-            lo, hi = 0, (1 << bits) - 1
+        limits = Interval.type_range(bits, signed)
+        lo, hi = limits.lower, limits.upper
         if lower < lo or upper > hi:
             return Interval.top()
         return Interval(lower, upper)

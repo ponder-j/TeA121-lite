@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "functions": [
+    {
+      "name": "main",
+      "entry": "entry",
+      "blocks": [
+        {
+          "id": "entry",
+          "instructions": [
+            {"id": "ch", "op": "alloca", "result": "ch", "count": 1, "element_size": 1},
+            {"id": "init", "op": "store", "pointer": "ch", "value": 127, "width": 1},
+            {"id": "read", "op": "load", "pointer": "ch", "result": "loaded", "width": 1},
+            {"id": "inc", "op": "add", "result": "incremented", "left": "loaded", "right": 1, "bits": 8},
+            {"id": "write", "op": "store", "pointer": "ch", "value": "incremented", "width": 1},
+            {"id": "zero", "op": "const", "result": "ret", "value": 0}
+          ],
+          "terminator": {"op": "ret", "value": "ret"}
+        }
+      ]
+    }
+  ]
+}

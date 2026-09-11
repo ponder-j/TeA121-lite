@@ -234,6 +234,9 @@ class CfgNode(Base):
     function_name: Mapped[str] = mapped_column(String(200), default="")
     block_id: Mapped[str] = mapped_column(String(200), nullable=False)
     label: Mapped[str | None] = mapped_column(String(200))
+    # Presentation metadata (IR lines, source locations, and terminator) is
+    # optional so results produced by older analyzer versions remain readable.
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     entry_state_json: Mapped[str] = mapped_column(Text, default="{}")
     exit_state_json: Mapped[str] = mapped_column(Text, default="{}")
     run: Mapped[AnalysisRun] = relationship(back_populates="cfg_nodes")

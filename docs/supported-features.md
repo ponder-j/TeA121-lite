@@ -4,6 +4,7 @@
 | --- | --- | --- |
 | MiniIR JSON 1.0.0 loading | supported | Schema checked before analysis |
 | Interval join/meet/widen | supported | Fixed-width overflow degrades to Top |
+| Typed integer overflow (CWE-190) | supported | `add`/`sub`/`mul` whose result provably leaves the type range emit an alarm; signed 8/16/32/64-bit by default |
 | alloca, GEP, load, store | supported | Byte offsets and stack object evidence |
 | Scalar store/load summaries | partial | Constant values tracked by object and byte offset; joins remain conservative |
 | icmp branch refinement | supported | Explicit comparison terminator metadata |

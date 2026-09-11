@@ -30,6 +30,10 @@ async function request<T, R = T>(path: string, fallback: R, map?: (value: T) => 
 export const api = {
   listProjects: (query?: PageQuery) => request<components['schemas']['Page_ProjectOut_'], Page<Project>>(`/projects${queryParams(query)}`, page(mock.projects, query), raw => mapPage(raw, adaptProject)),
   getProject: (id: string) => request<components['schemas']['ProjectOut'], Project>(`/projects/${id}`, mock.projects.find(p => p.id === id) ?? mock.projects[0], adaptProject),
+  deleteProject: async (id: string) => {
+    if (useMock) { const index = mock.projects.findIndex(project => project.id === id); if (index >= 0) mock.projects.splice(index, 1); return; }
+    const response = await fetch(`${apiBase}/projects/${id}`, { method: 'DELETE' }); if (!response.ok) return parseError(response);
+  },
   createProject: async (input: ProjectCreate) => {
     if (useMock) { const created: Project = { id: `proj-${Date.now()}`, name: input.name, description: input.description ?? '', file_count: 0, updated_at: new Date().toISOString() }; mock.projects.unshift(created); return created; }
     const response = await fetch(`${apiBase}/projects`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); if (!response.ok) return parseError(response); return adaptProject(await response.json() as components['schemas']['ProjectOut']);

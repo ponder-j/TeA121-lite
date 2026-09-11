@@ -12,7 +12,7 @@
     "rule_pack_id": {"type": "string"}, "rule_pack_version": {"type": "string"},
     "status": {"enum": ["succeeded", "unsupported", "error"]},
     "summary": {"type": "object", "required": ["alarm_count", "diagnostic_count", "unsupported_count", "error_count"], "properties": {"alarm_count": {"type": "integer", "minimum": 0}, "diagnostic_count": {"type": "integer", "minimum": 0}, "unsupported_count": {"type": "integer", "minimum": 0}, "error_count": {"type": "integer", "minimum": 0}}, "additionalProperties": true},
-    "inputs": {"type": "array"}, "config": {"type": "object"}, "artifacts": {"type": "array"}, "cfg": {"type": "array"}, "block_states": {"type": "array"}, "trace": {"type": "array"},
+    "inputs": {"type": "array"}, "config": {"type": "object"}, "artifacts": {"type": "array"}, "cfg": {"type": "array"}, "cfg_nodes": {"type": "array", "items": {"type": "object"}}, "block_states": {"type": "array"}, "trace": {"type": "array"},
     "alarms": {"type": "array", "items": {"$ref": "#/$defs/alarm"}},
     "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
   },

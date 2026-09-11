@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { api } from './api-client';
-import { adaptAlarm, adaptEvaluation, adaptEvaluationMatrix, adaptIr, adaptProject } from './adapters';
+import { adaptAlarm, adaptCfg, adaptEvaluation, adaptEvaluationMatrix, adaptIr, adaptProject } from './adapters';
 import { normalizePageQuery } from './api-client';
 
 describe('mock api contract flows', () => {
@@ -16,6 +16,13 @@ describe('mock api contract flows', () => {
     const uploaded = await api.uploadFile(project.id, file);
     expect(uploaded.project_id).toBe(project.id);
     expect(uploaded.path).toBe('test.c');
+  });
+
+  it('deletes a project in mock mode', async () => {
+    const project = await api.createProject({ name: 'Delete API test project' });
+    await api.deleteProject(project.id);
+    const result = await api.listProjects({ limit: 500 });
+    expect(result.items.some(item => item.id === project.id)).toBe(false);
   });
 
   it('normalizes nullable contract fields for the workbench', () => {
@@ -46,5 +53,31 @@ describe('mock api contract flows', () => {
     expect(ir.instructions[0].id).toBe('1');
     expect(ir.instructions[0].text).toBe('ret void');
     expect(ir.instructions).toHaveLength(1);
+  });
+
+  it('preserves CFG block IR, terminators, source lines, and branch metadata', () => {
+    const cfg = adaptCfg({
+      nodes: [
+        {
+          block_id: 'bb0',
+          function_name: 'main',
+          display_index: 1,
+          instructions: [{ id: 'i1', op: 'icmp', text: '%cmp = icmp slt i32 %i, 10', location: { file: 'main.c', line: 7 } }],
+          terminator: { op: 'br', condition: '%cmp', true: 'bb1', false: 'bb2' },
+          source_lines: [7],
+        },
+      ],
+      edges: [{ source: 'bb0', target: 'bb1', function: 'main', condition: '%cmp', polarity: 'true' }],
+    });
+
+    expect(cfg.nodes[0]).toMatchObject({
+      id: 'bb0',
+      displayIndex: 1,
+      instructions: 1,
+      sourceLines: [7],
+      terminator: { op: 'br', true: 'bb1', false: 'bb2' },
+    });
+    expect(cfg.nodes[0].ir?.[0].text).toContain('icmp slt');
+    expect(cfg.edges[0]).toEqual({ source: 'bb0', target: 'bb1', function: 'main', condition: '%cmp', polarity: 'true' });
   });
 });

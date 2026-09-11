@@ -8,8 +8,8 @@ DEFAULT_RULE_PACK = {
     "id": "cwe121-core",
     "detector_id": "stack-bounds",
     "version": "0.1.0",
-    "name": "CWE-121 core rules",
-    "supported_cwes": ["CWE-121"],
+    "name": "CWE-121 bounds + CWE-190 integer overflow rules",
+    "supported_cwes": ["CWE-121", "CWE-190"],
     "supported_families": [
         "CWE129_fgets",
         "CWE129_fscanf",
@@ -28,6 +28,7 @@ DEFAULT_RULE_PACK = {
         "copy_length_overflow",
         "wide_char_length_mismatch",
         "out_of_bounds",
+        "integer_overflow",
     ],
 }
 
@@ -44,14 +45,19 @@ def seed(db: Session) -> RulePack:
             detector_id=DEFAULT_RULE_PACK["detector_id"],
             version=DEFAULT_RULE_PACK["version"],
             name=DEFAULT_RULE_PACK["name"],
-            supported_cwes_json=json.dumps(DEFAULT_RULE_PACK["supported_cwes"]),
-            supported_families_json=json.dumps(DEFAULT_RULE_PACK["supported_families"]),
-            supported_violation_kinds_json=json.dumps(
-                DEFAULT_RULE_PACK["supported_violation_kinds"]
-            ),
         )
         db.add(row)
-        db.commit()
+    # Refresh declarations so an instance seeded before a new CWE/violation
+    # kind was added picks up the widened rule-pack scope.
+    row.detector_id = DEFAULT_RULE_PACK["detector_id"]
+    row.version = DEFAULT_RULE_PACK["version"]
+    row.name = DEFAULT_RULE_PACK["name"]
+    row.supported_cwes_json = json.dumps(DEFAULT_RULE_PACK["supported_cwes"])
+    row.supported_families_json = json.dumps(DEFAULT_RULE_PACK["supported_families"])
+    row.supported_violation_kinds_json = json.dumps(
+        DEFAULT_RULE_PACK["supported_violation_kinds"]
+    )
+    db.commit()
     return row
 
 

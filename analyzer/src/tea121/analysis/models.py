@@ -5,6 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+# Detector / rule-pack identity stamped onto every alarm and onto the top-level
+# result. The engine still ships as a single "core" detector, but individual
+# alarms carry their own CWE so new checks (for example CWE-190 integer
+# overflow) can be added without changing the run-level snapshot.
+DETECTOR_ID = "stack-bounds"
+DETECTOR_VERSION = "0.1.0"
+RULE_PACK_ID = "cwe121-core"
+RULE_PACK_VERSION = "0.1.0"
+
+CWE_STACK_BOUNDS = "CWE-121"
+CWE_INTEGER_OVERFLOW = "CWE-190"
+
 
 class FunctionModel(Protocol):
     name: str

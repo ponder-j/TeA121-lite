@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import re
 from typing import Any
 
 from tea121.domain import Interval, MemoryObject, PointerValue, State
-from .models import LibraryModelRegistry
+from .models import (
+    CWE_INTEGER_OVERFLOW,
+    CWE_STACK_BOUNDS,
+    DETECTOR_ID,
+    DETECTOR_VERSION,
+    RULE_PACK_ID,
+    RULE_PACK_VERSION,
+    LibraryModelRegistry,
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +24,9 @@ class AnalysisConfig:
     mode: str = "normal"
     max_call_depth: int = 8
     models: tuple[str, ...] = ("memcpy", "memmove", "memset", "strcpy", "strncpy")
+    # Report when a fixed-width integer operation provably leaves the range of
+    # the variable's type (CWE-190 integer overflow / wraparound).
+    check_integer_overflow: bool = True
 
 
 @dataclass
@@ -25,6 +36,10 @@ class AnalysisOutput:
     cfg: list[dict[str, Any]]
     block_states: list[dict[str, Any]]
     trace: list[dict[str, Any]]
+    # CFG nodes are kept separate from the legacy edge-only ``cfg`` payload so
+    # older consumers can continue to read the result while the workbench can
+    # render the actual IR contained by each block.
+    cfg_nodes: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -42,6 +57,8 @@ class AnalysisEngine:
         self._library_models = LibraryModelRegistry().with_enabled(self.config.models)
         self._functions = {str(item.get("name")): item for item in module.get("functions", []) if item.get("name")}
         self._summaries: dict[tuple[str, tuple[str, ...]], FunctionSummary] = {}
+        self._emitted_cfg_nodes: set[tuple[str, str]] = set()
+        self._emitted_alarm_keys: set[str] = set()
         self._global_objects = {
             str(item["id"]): MemoryObject(str(item["id"]), Interval.const(int(item.get("size_bytes", 0))), {"kind": "global"})
             for item in module.get("globals", [])
@@ -73,13 +90,46 @@ class AnalysisEngine:
         entry = str(function.get("entry", blocks[0].get("id")))
         predecessors: dict[str, list[str]] = {key: [] for key in by_id}
         successors: dict[str, list[str]] = {}
-        for block in blocks:
+        for ordinal, block in enumerate(blocks, start=1):
             bid = str(block.get("id"))
             succ = [str(x) for x in block.get("successors", [])]
             term = block.get("terminator", {})
             if term.get("op") == "br":
                 succ = [str(term["target"])] if "target" in term else [str(term[k]) for k in ("true", "false") if k in term]
             successors[bid] = succ
+            node_key = (str(function.get("name", "")), bid)
+            if node_key not in self._emitted_cfg_nodes:
+                self._emitted_cfg_nodes.add(node_key)
+                instructions = [
+                    {
+                        "id": str(inst.get("id", "")),
+                        "text": _instruction_text(inst),
+                        "op": inst.get("op"),
+                        "location": inst.get("location"),
+                    }
+                    for inst in block.get("instructions", [])
+                    if inst.get("op") != "nop"
+                ]
+                source_lines = sorted(
+                    {
+                        int(inst["location"]["line"])
+                        for inst in block.get("instructions", [])
+                        if isinstance(inst.get("location"), dict)
+                        and isinstance(inst["location"].get("line"), int)
+                        and inst["location"]["line"] > 0
+                    }
+                )
+                self.output.cfg_nodes.append(
+                    {
+                        "function_name": function.get("name", ""),
+                        "block_id": bid,
+                        "label": block.get("label") or bid,
+                        "display_index": ordinal,
+                        "instructions": instructions,
+                        "terminator": term,
+                        "source_lines": source_lines,
+                    }
+                )
             for target in succ:
                 if target in predecessors:
                     predecessors[target].append(bid)
@@ -152,7 +202,13 @@ class AnalysisEngine:
             return state.with_int(result, Interval.const(int(inst.get("value", 0))))
         if op in {"add", "sub", "mul"} and result:
             left, right = state.get_int(inst.get("left")), state.get_int(inst.get("right"))
-            value = getattr(left, op)(right, bits=inst.get("bits"), signed=inst.get("signed", True))
+            bits, signed = inst.get("bits"), inst.get("signed", True)
+            if self.config.check_integer_overflow and isinstance(bits, int) and bits > 0:
+                # Recompute with mathematical integers so an out-of-range
+                # result is still visible before ``_bounded`` degrades it.
+                exact = getattr(left, op)(right)
+                self._check_integer_overflow(inst, exact, bits, signed, function, block, result)
+            value = getattr(left, op)(right, bits=bits, signed=signed)
             return state.with_int(result, value)
         if op == "phi" and result:
             value = Interval.bottom_value()
@@ -184,6 +240,12 @@ class AnalysisEngine:
         if op in {"load", "store"}:
             pointer = state.get_pointer(inst.get("pointer"))
             width = int(inst.get("width", 1))
+            # Narrowing assignments (``char c = c + 1``) are lowered as a wider
+            # arithmetic op followed by a truncating store. The truncation
+            # itself is not modelled, so check the stored value against the
+            # destination type width at the store.
+            if op == "store" and self.config.check_integer_overflow and isinstance(inst.get("width"), int) and inst["width"] > 0:
+                self._check_value_fits_type(inst, state.get_int(inst.get("value")), inst["width"] * 8, inst.get("signed", True), function, block, inst.get("value"))
             # Loading a pointer from an external declaration (stdin, socket
             # handles, etc.) does not dereference the pointed-to object yet.
             # Preserve it as an unknown pointer without manufacturing an
@@ -206,6 +268,74 @@ class AnalysisEngine:
             self._diagnostic("UNSUPPORTED_INSTRUCTION", "unsupported MiniIR instruction", "unsupported", inst, function, block, "instruction semantics are not implemented")
         return state
 
+    def _check_value_fits_type(self, inst, value, bits, signed, function, block, name):
+        """Check a stored value against the destination type of a ``store``.
+
+        This catches conversions that preserve the source range because the
+        extractor collapses ``trunc``/``sext`` into ``copy``: the value is
+        still abstracted with its wide-type interval when it reaches the store.
+        """
+        self._emit_overflow_alarm(inst, value, bits, signed, function, block, name, source="stored value range")
+
+    def _check_integer_overflow(self, inst, value, bits, signed, function, block, result):
+        """Emit an alarm when a typed integer value leaves its type range.
+
+        ``value`` is the *unbounded* interval of the operation; ``bits`` and
+        ``signed`` describe the destination type. The report reuses the alarm
+        contract: ``memory_object_id`` names the SSA value, ``object_size`` is
+        the representable range of the type, ``offset`` is the computed value
+        range, and ``access_size`` is the storage width in bytes.
+        """
+        self._emit_overflow_alarm(inst, value, bits, signed, function, block, result, source="computed value range")
+
+    def _emit_overflow_alarm(self, inst, value, bits, signed, function, block, name, *, source):
+        kind = value.overflow_kind(bits, signed)
+        if kind is None:
+            return
+        type_range = Interval.type_range(bits, signed)
+        alarm_key = f"{function.get('name', '')}:{inst.get('id', '')}:{name}:integer_overflow"
+        if alarm_key in self._emitted_alarm_keys:
+            return
+        self._emitted_alarm_keys.add(alarm_key)
+        width = max(1, (bits + 7) // 8)
+        sign = "signed" if signed else "unsigned"
+        below = value.lower is not None and value.lower < type_range.lower
+        above = value.upper is not None and value.upper > type_range.upper
+        if below and above:
+            direction = "wraps around both type bounds"
+        elif below:
+            direction = "wraps below the type minimum"
+        else:
+            direction = "exceeds the type maximum"
+        self.output.alarms.append(
+            {
+                "alarm_key": alarm_key,
+                "detector_id": DETECTOR_ID,
+                "detector_version": DETECTOR_VERSION,
+                "rule_pack_id": RULE_PACK_ID,
+                "rule_pack_version": RULE_PACK_VERSION,
+                "cwe_id": CWE_INTEGER_OVERFLOW,
+                "family": None,
+                "violation_kind": "integer_overflow",
+                "severity": kind,
+                "function_name": function.get("name", ""),
+                "block_id": block.get("id"),
+                "instruction_id": inst.get("id"),
+                "instruction_text": inst.get("text", inst.get("op", "")),
+                "memory_object_id": str(name),
+                "object_size": _interval_json(type_range),
+                "offset": _interval_json(value),
+                "access_size": width,
+                "safe_condition": f"value.lower >= {type_range.lower} and value.upper <= {type_range.upper}",
+                "reason": [
+                    f"{source} {value} {direction} of the {sign} {bits}-bit type {type_range}",
+                    "every value in the range overflows the type" if kind == "definite" else "part of the range overflows the type",
+                ],
+                "source_location": inst.get("location"),
+                "evidence": {"value_range": _interval_json(value), "type_bits": bits, "type_signed": signed},
+            }
+        )
+
     def _check_access(self, inst, pointer, width, state, function, block, write):
         if pointer.unknown_base or not pointer.bases:
             self._diagnostic("UNKNOWN_BASE", "pointer base cannot be resolved", "unknown_effect", inst, function, block, "access may refer to an unknown object")
@@ -219,8 +349,12 @@ class AnalysisEngine:
             safe = width is not None and offset.lower is not None and offset.lower >= 0 and offset.upper is not None and obj.size_bytes.lower is not None and offset.upper + width <= obj.size_bytes.lower
             definite = width is not None and offset.lower is not None and obj.size_bytes.upper is not None and (offset.lower < 0 or offset.lower + width > obj.size_bytes.upper)
             if not safe:
+                alarm_key = f"{function.get('name','')}:{inst.get('id', len(self.output.alarms))}:{object_id}"
+                if alarm_key in self._emitted_alarm_keys:
+                    continue
+                self._emitted_alarm_keys.add(alarm_key)
                 severity = "definite" if definite else "possible"
-                self.output.alarms.append({"alarm_key": f"{function.get('name','')}:{inst.get('id', len(self.output.alarms))}:{object_id}", "detector_id": "stack-bounds", "detector_version": "0.1.0", "rule_pack_id": "cwe121-core", "rule_pack_version": "0.1.0", "cwe_id": "CWE-121", "family": None, "violation_kind": "out_of_bounds", "severity": severity, "function_name": function.get("name", ""), "block_id": block.get("id"), "instruction_id": inst.get("id"), "instruction_text": inst.get("text", inst.get("op", "")), "memory_object_id": object_id, "object_size": _interval_json(obj.size_bytes), "offset": _interval_json(offset), "access_size": width if width is not None else 0, "safe_condition": "offset.lower >= 0 and offset.upper + access_size <= object_size.lower", "reason": ["access range is not provably inside the stack object", "access width is unknown" if width is None else "access width exceeds object bounds"], "source_location": inst.get("location")})
+                self.output.alarms.append({"alarm_key": alarm_key, "detector_id": DETECTOR_ID, "detector_version": DETECTOR_VERSION, "rule_pack_id": RULE_PACK_ID, "rule_pack_version": RULE_PACK_VERSION, "cwe_id": CWE_STACK_BOUNDS, "family": None, "violation_kind": "out_of_bounds", "severity": severity, "function_name": function.get("name", ""), "block_id": block.get("id"), "instruction_id": inst.get("id"), "instruction_text": inst.get("text", inst.get("op", "")), "memory_object_id": object_id, "object_size": _interval_json(obj.size_bytes), "offset": _interval_json(offset), "access_size": width if width is not None else 0, "safe_condition": "offset.lower >= 0 and offset.upper + access_size <= object_size.lower", "reason": ["access range is not provably inside the stack object", "access width is unknown" if width is None else "access width exceeds object bounds"], "source_location": inst.get("location")})
 
     def _call_model(self, inst, state, function, block, call_stack):
         name = inst.get("callee", "")
@@ -406,3 +540,23 @@ def _interval_json(value: Interval) -> dict[str, Any]:
 
 def _state_json(state: State) -> dict[str, Any]:
     return {"reachable": state.reachable, "integers": {k: _interval_json(v) for k, v in state.integers.items()}, "pointers": {k: {"bases": sorted(v.bases), "offset_bytes": _interval_json(v.offset_bytes), "unknown_base": v.unknown_base} for k, v in state.pointers.items()}, "memory_objects": {k: {"size_bytes": _interval_json(v.size_bytes), "escaped": v.escaped} for k, v in state.memory_objects.items()}}
+
+
+def _instruction_text(inst: dict[str, Any]) -> str:
+    """Return a compact IR line even for hand-authored MiniIR fixtures."""
+    if inst.get("text"):
+        return str(inst["text"])
+    op = str(inst.get("op", "instruction"))
+    result = f"{inst['result']} = " if inst.get("result") else ""
+    if op in {"const", "constant"}:
+        return f"{result}const {inst.get('value', 0)}"
+    if op in {"add", "sub", "mul", "icmp"}:
+        operands = ", ".join(str(inst.get(key, "?")) for key in ("left", "right"))
+        return f"{result}{op} {operands}"
+    if op in {"gep", "getelementptr"}:
+        return f"{result}gep {inst.get('base', '?')} + {inst.get('index', '?')}"
+    if op in {"load", "store"}:
+        return f"{result}{op} {inst.get('pointer', '?')}"
+    if op == "call":
+        return f"{result}call @{inst.get('callee', '?')}"
+    return f"{result}{op}"

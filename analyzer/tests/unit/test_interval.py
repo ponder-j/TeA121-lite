@@ -16,3 +16,32 @@ def test_bottom_top_are_distinct():
 
 def test_overflow_loses_precision():
     assert Interval.const(127).add(Interval.const(1), bits=8, signed=True).is_top
+
+
+def test_join_is_commutative_and_top_is_absorbing():
+    bounded = Interval.range(0, 2)
+    top = Interval.top()
+    assert bounded.join(top).is_top
+    assert top.join(bounded).is_top
+    assert bounded.join(top) == top.join(bounded)
+
+
+def test_type_range_reflects_signedness():
+    assert Interval.type_range(8, signed=True) == Interval.range(-128, 127)
+    assert Interval.type_range(8, signed=False) == Interval.range(0, 255)
+    assert Interval.type_range(0).is_top
+
+
+def test_overflow_kind_classifies_definite_and_possible():
+    assert Interval.const(128).overflow_kind(8) == "definite"
+    assert Interval.const(127).overflow_kind(8) is None
+    assert Interval.const(-129).overflow_kind(8) == "definite"
+    assert Interval.range(100, 200).overflow_kind(8) == "possible"
+    assert Interval.range(-200, 0).overflow_kind(8) == "possible"
+    assert Interval.top().overflow_kind(8) is None
+    assert Interval.bottom_value().overflow_kind(8) is None
+
+
+def test_unsigned_type_range_is_not_signed_overflow():
+    assert Interval.const(200).overflow_kind(8, signed=False) is None
+    assert Interval.const(256).overflow_kind(8, signed=False) == "definite"

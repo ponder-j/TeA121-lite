@@ -22,6 +22,9 @@ backend/data/
 analysis-output/
 *.db
 
+# macOS 元数据
+.DS_Store
+
 # 缓存与中间文件
 __pycache__/
 *.py[cod]

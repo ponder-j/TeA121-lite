@@ -198,7 +198,9 @@ def analyze_side(
         if failure or completed is None or completed.returncode:
             metadata.update(outcome="error", code="EXTRACTION_FAILED", message=failure or (completed.stderr.strip() if completed else "extractor failed"), returncode=completed.returncode if completed else None)
             return metadata
-        command = [tea121, "analyze", str(miniir), "--format", "json"]
+        # The s01 dataset is CWE-121 only; keep the historical verdicts by
+        # excluding the CWE-190 check unless a caller opts back in.
+        command = [tea121, "analyze", str(miniir), "--format", "json", "--no-integer-overflow"]
         completed, failure = _run(command, timeout)
         metadata["command"].append(command)
         if failure or completed is None or completed.returncode not in {0, 1}:

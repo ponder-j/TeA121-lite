@@ -60,6 +60,41 @@ def alarm_out(a: Alarm) -> dict:
     }
 
 
+def dedupe_diagnostics(rows: list[DiagnosticRow]) -> list[DiagnosticRow]:
+    """Collapse repeated instruction diagnostics at the same source statement.
+
+    A single source expression can lower to several unsupported MiniIR
+    instructions. Keep the raw rows in storage, but expose one user-facing
+    diagnostic per source location so the workbench does not repeat the same
+    finding three times. Instruction IDs remain useful for raw result exports.
+    """
+    unique: list[DiagnosticRow] = []
+    seen: set[tuple[object, ...]] = set()
+    for row in rows:
+        location = json_value(row.location_json, {})
+        if not isinstance(location, dict):
+            location = {}
+        line = location.get("line", row.source_line)
+        file_name = location.get("file", row.source_file_id)
+        key: tuple[object, ...] = (
+            row.code,
+            row.severity,
+            row.message,
+            row.impact,
+            row.function_name,
+            row.block_id,
+            file_name,
+            line,
+        )
+        if line is None:
+            key += (row.instruction_id,)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(row)
+    return unique
+
+
 def diagnostic_out(d: DiagnosticRow) -> dict:
     return {
         "id": d.id,
@@ -97,7 +132,9 @@ def filters(q, detector_id, rule_pack_id, cwe_id, family, violation_kind, severi
 def summary(run_id: str, db: Session = Depends(get_db)):
     run = run_or_404(db, run_id)
     alarms = db.scalars(select(Alarm).where(Alarm.run_id == run_id)).all()
-    diagnostics = db.scalars(select(DiagnosticRow).where(DiagnosticRow.run_id == run_id)).all()
+    diagnostics = dedupe_diagnostics(
+        db.scalars(select(DiagnosticRow).where(DiagnosticRow.run_id == run_id)).all()
+    )
     duration = (
         int((run.finished_at - run.started_at).total_seconds() * 1000)
         if run.started_at and run.finished_at
@@ -194,14 +231,13 @@ def diagnostics(
     run_or_404(db, run_id)
     limit, offset = page_params(limit, offset)
     q = select(DiagnosticRow).where(DiagnosticRow.run_id == run_id)
-    cq = select(func.count()).select_from(DiagnosticRow).where(DiagnosticRow.run_id == run_id)
     if severity:
         q = q.where(DiagnosticRow.severity == severity)
-        cq = cq.where(DiagnosticRow.severity == severity)
-    rows = db.scalars(q.order_by(DiagnosticRow.id).offset(offset).limit(limit)).all()
+    rows = dedupe_diagnostics(db.scalars(q.order_by(DiagnosticRow.id)).all())
+    total = len(rows)
     return {
-        "items": [diagnostic_out(x) for x in rows],
-        "total": db.scalar(cq) or 0,
+        "items": [diagnostic_out(x) for x in rows[offset : offset + limit]],
+        "total": total,
         "limit": limit,
         "offset": offset,
     }
@@ -223,6 +259,14 @@ def cfg(run_id: str, function: str | None = None, db: Session = Depends(get_db))
                 "id": n.block_id,
                 "label": n.label or n.block_id,
                 "function": n.function_name,
+                **{
+                    **json_value(n.metadata_json, {}),
+                    "source_lines": [
+                        line
+                        for line in json_value(n.metadata_json, {}).get("source_lines", [])
+                        if isinstance(line, int) and line > 0
+                    ],
+                },
                 "entry_state": json_value(n.entry_state_json, {}),
                 "exit_state": json_value(n.exit_state_json, {}),
             }

@@ -179,20 +179,36 @@ def import_result(
         )
     cfg = result.get("cfg", [])
     if isinstance(cfg, dict):
-        nodes, edges = cfg.get("nodes", []), cfg.get("edges", [])
+        legacy_nodes, edges = cfg.get("nodes", []), cfg.get("edges", [])
     else:
-        nodes, edges = [], cfg
+        legacy_nodes, edges = [], cfg
+    # Prefer presentation-rich nodes from new analyzers when both formats are
+    # present. The legacy nodes remain a fallback for older analyzer results.
+    nodes = list(result.get("cfg_nodes", [])) + list(legacy_nodes)
+    cfg_rows: dict[tuple[str, str], CfgNode] = {}
     for item in nodes:
-        db.add(
-            CfgNode(
-                run_id=run.id,
-                function_name=item.get("function_name", item.get("function", "")),
-                block_id=str(item.get("block_id", item.get("id", ""))),
-                label=item.get("label"),
-                entry_state_json=json.dumps(item.get("entry_state", {}), ensure_ascii=False),
-                exit_state_json=json.dumps(item.get("exit_state", {}), ensure_ascii=False),
-            )
+        function_name = item.get("function_name", item.get("function", "")) or ""
+        block_id = str(item.get("block_id", item.get("id", "")))
+        key = (function_name, block_id)
+        if key in cfg_rows:
+            continue
+        row = CfgNode(
+            run_id=run.id,
+            function_name=function_name,
+            block_id=block_id,
+            label=item.get("label"),
+            metadata_json=json.dumps(
+                {
+                    "display_index": item.get("display_index"),
+                    "instructions": item.get("instructions", []),
+                    "terminator": item.get("terminator", {}),
+                    "source_lines": item.get("source_lines", []),
+                },
+                ensure_ascii=False,
+            ),
         )
+        cfg_rows[key] = row
+        db.add(row)
     for item in edges:
         db.add(
             CfgEdge(
@@ -205,16 +221,22 @@ def import_result(
             )
         )
     for item in result.get("block_states", []):
-        db.add(
-            CfgNode(
+        function_name = item.get("function_name", "") or ""
+        block_id = str(item.get("block_id", ""))
+        key = (function_name, block_id)
+        row = cfg_rows.get(key)
+        if row is None:
+            row = CfgNode(
                 run_id=run.id,
-                function_name=item.get("function_name", ""),
-                block_id=str(item.get("block_id", "")),
+                function_name=function_name,
+                block_id=block_id,
                 label=None,
-                entry_state_json=json.dumps(item.get("entry_state", {}), ensure_ascii=False),
-                exit_state_json=json.dumps(item.get("exit_state", {}), ensure_ascii=False),
+                metadata_json="{}",
             )
-        )
+            cfg_rows[key] = row
+            db.add(row)
+        row.entry_state_json = json.dumps(item.get("entry_state", {}), ensure_ascii=False)
+        row.exit_state_json = json.dumps(item.get("exit_state", {}), ensure_ascii=False)
     for item in result.get("trace", []):
         db.add(
             TraceEvent(

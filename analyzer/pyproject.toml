@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tea121-analyzer"
 version = "0.1.0"
-description = "Explainable CWE-121 stack buffer bounds analyzer"
+description = "Explainable CWE-121 bounds and CWE-190 integer overflow analyzer"
 requires-python = ">=3.10"
 dependencies = []
 

@@ -1,3 +1,0 @@
-import { useMemo, useState } from 'react';
-import type { TraceEvent } from '../types/generated';
-export function TracePlayer({ events, onSelect }: { events: TraceEvent[]; onSelect?: (event: TraceEvent) => void }) { const unique = useMemo(() => events.filter((e, i, a) => i === 0 || e.sequence !== a[i - 1].sequence), [events]); const [index, setIndex] = useState(0); const event = unique[index]; const move = (next: number) => { const safe = Math.max(0, Math.min(unique.length - 1, next)); setIndex(safe); if (unique[safe]) onSelect?.(unique[safe]); }; return <div className="trace-player"><button onClick={() => move(index - 1)}>后退</button><button onClick={() => move(index + 1)}>前进</button><span>{event ? `#${event.sequence} ${event.detail}` : '暂无事件'}</span></div>; }

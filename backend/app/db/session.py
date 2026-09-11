@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
@@ -34,3 +34,10 @@ def init_db() -> None:
     from app.db import models  # noqa: F401
 
     Base.metadata.create_all(engine)
+    # ``create_all`` deliberately does not alter an existing development DB.
+    # Add the one additive column needed by the richer CFG response so users
+    # upgrading an existing checkout do not need to delete their data.
+    columns = {column["name"] for column in inspect(engine).get_columns("cfg_nodes")}
+    if "metadata_json" not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE cfg_nodes ADD COLUMN metadata_json TEXT DEFAULT '{}'"))

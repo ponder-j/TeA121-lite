@@ -7,8 +7,8 @@ from app.db.models import Detector
 DEFAULT_DETECTOR = {
     "id": "stack-bounds",
     "version": "0.1.0",
-    "name": "Stack bounds detector",
-    "supported_cwes": ["CWE-121"],
+    "name": "Stack bounds + integer overflow detector",
+    "supported_cwes": ["CWE-121", "CWE-190"],
     "enabled": True,
 }
 
@@ -24,7 +24,14 @@ def seed(db: Session) -> Detector:
             enabled=True,
         )
         db.add(row)
-        db.commit()
+    else:
+        # Refresh declarations so an instance seeded before a new CWE was
+        # added picks up the widened rule-pack scope.
+        row.version = DEFAULT_DETECTOR["version"]
+        row.name = DEFAULT_DETECTOR["name"]
+        row.supported_cwes_json = json.dumps(DEFAULT_DETECTOR["supported_cwes"])
+        row.enabled = DEFAULT_DETECTOR["enabled"]
+    db.commit()
     return row
 
 

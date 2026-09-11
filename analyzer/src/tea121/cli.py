@@ -13,7 +13,7 @@ from tea121.report import build_result, result_to_text
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="tea121", description="Explainable CWE-121 MiniIR analyzer")
+    parser = argparse.ArgumentParser(prog="tea121", description="Explainable CWE-121/CWE-190 MiniIR analyzer")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
     analyze = sub.add_parser("analyze", help="analyze a MiniIR JSON module")
@@ -22,6 +22,11 @@ def main(argv: list[str] | None = None) -> int:
     analyze.add_argument("--output", type=Path)
     analyze.add_argument("--mode", choices=("normal", "trace"), default="normal")
     analyze.add_argument("--widen-after", type=int, default=3)
+    analyze.add_argument(
+        "--no-integer-overflow",
+        action="store_true",
+        help="disable CWE-190 typed-integer overflow detection",
+    )
     args = parser.parse_args(argv)
     if args.command == "analyze":
         try:
@@ -37,8 +42,8 @@ def main(argv: list[str] | None = None) -> int:
             result["diagnostics"] = [{"diagnostic_id": "d-1", "code": "INVALID_INPUT", "severity": "error", "message": str(exc), "impact": "MiniIR could not be loaded", "location": None}]
             result["summary"].update(alarm_count=0, diagnostic_count=1, error_count=1)
             return _emit(result, args)
-        config = AnalysisConfig(mode=args.mode, widen_after=max(1, args.widen_after))
-        result = build_result(AnalysisEngine(module, config).run(), input_path=str(args.input), config={"mode": args.mode, "widen_after": config.widen_after})
+        config = AnalysisConfig(mode=args.mode, widen_after=max(1, args.widen_after), check_integer_overflow=not args.no_integer_overflow)
+        result = build_result(AnalysisEngine(module, config).run(), input_path=str(args.input), config={"mode": args.mode, "widen_after": config.widen_after, "check_integer_overflow": config.check_integer_overflow})
         result["artifacts"] = module.get("_artifacts", [])
         return _emit(result, args)
     return 2
