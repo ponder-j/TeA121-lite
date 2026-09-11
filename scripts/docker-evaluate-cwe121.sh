@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-jobs="${TEA121_JOBS:-18}"
+docker_cpus="$(docker info --format '{{.NCPU}}' 2>/dev/null || true)"
+if [[ "$docker_cpus" =~ ^[0-9]+$ ]] && (( docker_cpus > 2 )); then
+  default_jobs=$((docker_cpus - 2))
+else
+  default_jobs=4
+fi
+jobs="${TEA121_JOBS:-$default_jobs}"
 image="${TEA121_IMAGE:-tea121-lite:llvm15}"
 dataset_root="${TEA121_DATASET_ROOT:-$PWD/tests/testcases}"
 support_dir="${TEA121_SUPPORT_DIR:-$PWD/tests/testcasesupport}"

@@ -66,10 +66,11 @@ options. A compilation failure remains `error` and is included in conservative
 metrics. Use `--flow`/`--limit` for a deterministic smoke subset before a full
 run.
 
-For a full local s01 run on the configured 18-core machine, use
-`TEA121_JOBS=18 scripts/docker-evaluate-juliet.sh`. Set `TEA121_FLOW=51` to
-restrict the wrapper to one flow variant. Results remain deterministically
-sorted even when case subprocesses run concurrently.
+The Docker wrappers default to `NCPU - 2` workers (with a minimum fallback)
+so the daemon and the backend/web containers retain CPU and memory headroom.
+Override with `TEA121_JOBS` when running on an otherwise idle host. Set
+`TEA121_FLOW=51` to restrict the legacy wrapper to one flow variant.
+Results remain deterministically sorted even when case subprocesses run concurrently.
 
 ### Full CWE-121 batch evaluation
 
@@ -78,7 +79,8 @@ supported-only recall/specificity, and per-suite/family matrices. The Docker
 wrapper defaults to the dataset checked out under `tests/testcases`:
 
 ```bash
-TEA121_JOBS=18 scripts/docker-evaluate-cwe121.sh
+scripts/docker-evaluate-cwe121.sh
+# On this 10-CPU/8-GiB Docker VM the default is 8 workers.
 # optional deterministic subset:
 TEA121_SUITE=s01,s02 TEA121_FLOW=01 TEA121_LIMIT=20   scripts/docker-evaluate-cwe121.sh
 ```

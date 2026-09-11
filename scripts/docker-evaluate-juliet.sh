@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-jobs="${TEA121_JOBS:-18}"
+docker_cpus="$(docker info --format '{{.NCPU}}' 2>/dev/null || true)"
+if [[ "$docker_cpus" =~ ^[0-9]+$ ]] && (( docker_cpus > 2 )); then
+  default_jobs=$((docker_cpus - 2))
+else
+  default_jobs=4
+fi
+jobs="${TEA121_JOBS:-$default_jobs}"
 flow_args=()
 if [[ -n "${TEA121_FLOW:-}" ]]; then
   flow_args+=(--flow "$TEA121_FLOW")
@@ -17,6 +23,6 @@ docker run --rm --entrypoint python3 \
   /workspace/juliet测试集/testcases/CWE121_Stack_Based_Buffer_Overflow \
   --include-dir /workspace/juliet测试集/testcasesupport \
   --jobs "$jobs" \
-  "${flow_args[@]}" \
+  ${flow_args[@]+"${flow_args[@]}"} \
   -o /workspace/output/juliet-s01-all.json \
   --csv-output /workspace/output/juliet-s01-all.csv
