@@ -33,6 +33,6 @@ docker run --rm --entrypoint python3 \
   /workspace/testcases \
   --include-dir /workspace/testcasesupport \
   --jobs "$jobs" \
-  "${extra_args[@]}" \
+  ${extra_args[@]+"${extra_args[@]}"} \
   -o "/workspace/output/$(basename "$output")" \
   --csv-output "/workspace/output/$(basename "$csv_output")"
