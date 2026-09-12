@@ -3,8 +3,8 @@
 | Feature | Status | Notes |
 | --- | --- | --- |
 | MiniIR JSON 1.0.0 loading | supported | Schema checked before analysis |
-| Interval join/meet/widen/narrow | supported | Single-sided infinities are preserved; fixed-width overflow degrades to Top |
-| Typed integer overflow (CWE-190) | supported | `add`/`sub`/`mul` whose result provably leaves the type range emit an alarm; signed 8/16/32/64-bit by default |
+| Interval join/meet/widen/narrow | supported | Single-sided infinities are preserved; fixed-width overflow retains the full type range |
+| Typed integer overflow/underflow (CWE-190/CWE-191) | supported | `add`/`sub`/`mul` and narrowing casts are checked against explicit signed/unsigned type ranges; overflow and underflow receive separate CWEs |
 | alloca, GEP, load, store | supported | Byte offsets and stack object evidence |
 | Scalar store/load summaries | partial | Constant values tracked by object and byte offset; joins remain conservative |
 | icmp branch refinement | supported | All signed/unsigned ordering predicates, both true and false edges, variables and constants |
@@ -12,7 +12,7 @@
 | memcpy/memmove/memset/strncpy | supported | Unknown lengths are conservative |
 | strcpy | supported | Exact only with a known source string length |
 | fgets/recv input writes | partial | Constant maximum count is checked; unknown bounds remain unsupported |
-| fscanf input | partial | Numeric conversions use fixed scalar widths; string conversions remain unbounded |
+| fscanf input | partial | Numeric conversions use destination element widths; `%s`/`%[` remain unbounded |
 | Scalar library returns | partial | `atoi`/`rand`/`strlen`/socket returns are abstracted and propagated |
 | Unknown calls/instructions | conservative | Diagnostic plus pointer escape where applicable |
 | C/LLVM source input | supported | Docker image provides LLVM 15 compiler, optimizer, extractor, and CLI bridge |

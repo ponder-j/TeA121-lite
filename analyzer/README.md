@@ -91,14 +91,19 @@ CSV keeps the per-case outcome plus diagnostic codes for failure triage.
 The tracked evaluation report records the reproducible baseline and the
 iteration history: `docs/juliet-cwe121-evaluation.md`.
 
+For integer overflow/underflow evaluation, use
+`scripts/docker-evaluate-integer-cwes.sh`; the tracked report is
+`docs/juliet-cwe190-191-evaluation.md`.
+
 ## Supported MiniIR operations
 
 `const`, `add`, `sub`, `mul`, `icmp`, `phi`, `select`, `alloca`, `gep`,
 `load`, `store`, and conservative models for `memcpy`, `memmove`, `memset`,
 `strcpy`, `strncpy`, `fgets`, `fscanf`, and `recv` are implemented. Scalar
 results from observational calls such as `atoi`, `strlen`, and `rand` are
-propagated as exact summaries when available or `Top` otherwise. Unknown
-instructions/calls create diagnostics rather than being treated as clean.
+propagated as bounded type ranges when an exact summary is unavailable.
+Unknown scalar instructions and calls are conservatively abstracted; calls
+that may mutate tracked pointer arguments still create diagnostics.
 
 Control-flow analysis supports edge-sensitive PHI values, all signed/unsigned
 `icmp` predicates on both branch polarities, bounded narrowing after loop

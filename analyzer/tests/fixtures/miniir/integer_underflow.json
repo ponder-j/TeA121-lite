@@ -8,8 +8,8 @@
         {
           "id": "entry",
           "instructions": [
-            {"id": "zero", "op": "const", "result": "zero", "value": 0},
-            {"id": "dec", "op": "sub", "result": "underflowed", "left": "zero", "right": 1, "bits": 8},
+            {"id": "minimum", "op": "const", "result": "minimum", "value": -128},
+            {"id": "dec", "op": "sub", "result": "underflowed", "left": "minimum", "right": 1, "bits": 8},
             {"id": "ret", "op": "const", "result": "ret", "value": 0}
           ],
           "terminator": {"op": "ret", "value": "ret"}

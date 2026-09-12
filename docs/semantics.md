@@ -7,18 +7,19 @@ size. Any uncertain range becomes a `possible` alarm; a range that is outside
 for every value becomes `definite`.
 
 `Bottom` means an unreachable path and `Top` means an unknown value. Integer
-operations with a possible fixed-width overflow conservatively return `Top`.
-Before degrading, the engine checks the mathematical result against the
-type range recorded on the instruction (`bits`, and `signed` when present):
-`add`/`sub`/`mul` that leave the range raise a `CWE-190` `integer_overflow`
-alarm (`definite` when every value overflows, `possible` when the interval
-straddles a bound). ``store`` instructions are checked the same way against
-their destination width, which catches narrowing assignments such as
+operations whose mathematical result leaves the recorded type range are
+checked against that range. A result above the type maximum raises a
+`CWE-190` `integer_overflow` alarm; a result below the minimum raises a
+`CWE-191` `integer_underflow` alarm (`definite` when every value leaves the
+range, `possible` when the interval straddles a bound). After the check, the
+abstract value is conservatively clamped to the complete type range rather
+than discarded as `Top`, so downstream `trunc`/store checks retain the type
+width. ``store`` instructions are checked the same way against their
+destination width, which catches narrowing assignments such as
 ``char c = c + 1`` that LLVM lowers as a wide operation plus a truncating
-store. Both directions are reported as CWE-190 (CWE-191 is the related
-underflow-specific weakness). LLVM IR is signless, so when the extractor does
-not record ``signed`` the engine assumes a signed type; this can misjudge
-unsigned wraparound until per-variable signedness is carried through MiniIR.
+store. LLVM IR integer types are signless; ``zext``/``sext``/``trunc`` and
+unsigned comparison predicates are modelled explicitly, and callers may
+provide a fallback signedness when DWARF information is unavailable.
 Unknown calls mark pointer arguments' stack objects as escaped and emit an
 `unknown_effect` diagnostic. Unsupported instructions emit `unsupported`
 diagnostics and are never counted as clean cases. Bounded input routines model
