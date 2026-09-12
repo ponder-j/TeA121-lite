@@ -249,12 +249,26 @@ int main(int argc, char **argv) {
     if (const auto *integer = dyn_cast<ConstantInt>(global.getInitializer())) {
       item["integer_value"] = static_cast<int64_t>(integer->getSExtValue());
     }
-    if (const auto *string = dyn_cast<ConstantDataArray>(global.getInitializer()); string && string->isString()) {
-      StringRef value = string->getAsString();
-      size_t length = value.size();
-      if (length > 0 && value.back() == '\0') --length;
-      item["string_length"] = static_cast<int64_t>(length);
-      item["string_value"] = value.substr(0, length).str();
+    if (const auto *array = dyn_cast<ConstantDataArray>(global.getInitializer())) {
+      item["element_size"] = static_cast<int64_t>(layout.getTypeAllocSize(array->getElementType()).getFixedValue());
+      if (array->isString()) {
+        StringRef value = array->getAsString();
+        size_t length = value.size();
+        if (length > 0 && value.back() == '\0') --length;
+        item["string_length"] = static_cast<int64_t>(length);
+        item["string_value"] = value.substr(0, length).str();
+      } else {
+        // wchar_t literals are emitted as integer arrays rather than i8
+        // strings. Record the null-terminated character count so wcslen and
+        // wide-string sinks can use the same local-string abstraction.
+        for (unsigned index = 0; index < array->getNumElements(); ++index) {
+          const auto *element = dyn_cast<ConstantInt>(array->getElementAsConstant(index));
+          if (element && element->isZero()) {
+            item["string_length"] = static_cast<int64_t>(index);
+            break;
+          }
+        }
+      }
     }
     globals.push_back(std::move(item));
   }

@@ -227,3 +227,19 @@ def test_memcpy_from_known_string_propagates_string_length():
     result = AnalysisEngine(module).run()
     assert result.alarms and result.alarms[0]["severity"] == "definite"
     assert not any(item["code"] == "UNKNOWN_STRING_LENGTH" for item in result.diagnostics)
+
+
+def test_wide_memcpy_initialization_propagates_character_length():
+    module = {
+        "schema_version": "1.0.0",
+        "globals": [{"id": "wide_literal", "size_bytes": 44, "element_size": 4, "string_length": 10}],
+        "functions": [{"name": "copy", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "src", "op": "alloca", "result": "src", "count": 11, "element_size": 4},
+            {"id": "init", "op": "call", "callee": "memcpy", "args": ["src", "wide_literal", 44]},
+            {"id": "dst", "op": "alloca", "result": "dst", "count": 10, "element_size": 4},
+            {"id": "copy", "op": "call", "callee": "wcscpy", "args": ["dst", "src"]},
+        ]}]}],
+    }
+    result = AnalysisEngine(module).run()
+    assert result.alarms and result.alarms[0]["severity"] == "definite"
+    assert not any(item["code"] == "UNKNOWN_STRING_LENGTH" for item in result.diagnostics)

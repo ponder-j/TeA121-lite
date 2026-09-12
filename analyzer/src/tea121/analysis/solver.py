@@ -64,7 +64,11 @@ class AnalysisEngine:
         # the narrowed fixed point so stale intermediate alarms cannot survive.
         self._record_effects = True
         self._global_objects = {
-            str(item["id"]): MemoryObject(str(item["id"]), Interval.const(int(item.get("size_bytes", 0))), {"kind": "global"})
+            str(item["id"]): MemoryObject(
+                str(item["id"]),
+                Interval.const(int(item.get("size_bytes", 0))),
+                {"kind": "global", "element_size": int(item.get("element_size", 1))},
+            )
             for item in module.get("globals", [])
             if "id" in item and "size_bytes" in item
         }
@@ -566,10 +570,11 @@ class AnalysisEngine:
             self._check_access(inst, dest, length.lower if length.is_singleton else None, state, function, block, write=True)
             if length.is_singleton:
                 source_length = self._known_string_length(state, source)
+                element_size = self._known_element_size(state, source)
                 if (
                     source_length is not None
                     and source_length.is_singleton
-                    and length.lower == source_length.lower + 1
+                    and length.lower == (source_length.lower + 1) * element_size
                 ):
                     state = self._set_pointer_string_length(state, dest, source_length)
                 return state
@@ -755,6 +760,15 @@ class AnalysisEngine:
         for other in list(lengths)[1:]:
             value = value.join(other)
         return value
+
+    def _known_element_size(self, state: State, pointer: PointerValue) -> int:
+        if pointer.unknown_base or not pointer.bases:
+            return 1
+        sizes = []
+        for object_id in pointer.bases:
+            obj = state.memory_objects.get(object_id) or self._objects.get(object_id)
+            sizes.append(int((obj.allocation_site if obj else {}).get("element_size", 1)))
+        return max(sizes) if sizes else 1
 
     def _set_pointer_string_length(self, state: State, pointer: PointerValue, length: Interval) -> State:
         if pointer.unknown_base:
