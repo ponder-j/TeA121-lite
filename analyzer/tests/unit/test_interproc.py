@@ -25,3 +25,27 @@ def test_recursive_call_is_conservatively_diagnosed():
     module = {"schema_version": "1.0.0", "functions": [{"name": "loop", "entry": "e", "blocks": [{"id": "e", "instructions": [{"id": "r", "op": "call", "callee": "loop", "args": []}]}]}]}
     result = AnalysisEngine(module).run()
     assert any(item["code"] == "RECURSIVE_CALL" for item in result.diagnostics)
+
+
+def test_global_scalar_memory_is_preserved_across_calls():
+    module = {
+        "schema_version": "1.0.0",
+        "globals": [{"id": "flag", "size_bytes": 4, "integer_value": 0}],
+        "functions": [
+            {"name": "main", "entry": "e", "blocks": [{"id": "e", "instructions": [
+                {"id": "c", "op": "call", "callee": "helper", "args": []}
+            ]}]},
+            {"name": "helper", "entry": "e", "blocks": [
+                {"id": "e", "instructions": [
+                    {"id": "load", "op": "load", "pointer": "flag", "result": "condition", "width": 4},
+                ], "terminator": {"op": "br", "condition": "condition", "true": "dead", "false": "safe"}},
+                {"id": "dead", "instructions": [
+                    {"id": "b", "op": "alloca", "result": "b", "count": 4, "element_size": 1},
+                    {"id": "p", "op": "gep", "result": "p", "base": "b", "index": 4, "element_size": 1},
+                    {"id": "store", "op": "store", "pointer": "p", "value": 0, "width": 1},
+                ]},
+                {"id": "safe", "instructions": []},
+            ]},
+        ],
+    }
+    assert AnalysisEngine(module).run().alarms == []

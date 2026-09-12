@@ -78,6 +78,11 @@ class AnalysisEngine:
             for item in module.get("globals", [])
             if "id" in item and "string_value" in item
         }
+        self._global_scalars = {
+            str(item["id"]): Interval.const(int(item["integer_value"]))
+            for item in module.get("globals", [])
+            if "id" in item and "integer_value" in item
+        }
 
     def run(self) -> AnalysisOutput:
         called = {str(inst.get("callee")) for fn in self._functions.values() for block in fn.get("blocks", []) for inst in block.get("instructions", []) if inst.get("op") == "call" and inst.get("callee") in self._functions}
@@ -527,7 +532,7 @@ class AnalysisEngine:
                 return state.with_int(result, Interval.top()) if result else state
             callee = self._functions[name]
             parameters = [str(item) for item in callee.get("parameters", [])]
-            callee_state = State(dict(state.integers), dict(state.pointers), dict(state.memory_objects), dict(state.string_lengths), state.reachable, state.reasons)
+            callee_state = State(dict(state.integers), dict(state.pointers), dict(state.memory_objects), dict(state.string_lengths), state.reachable, state.reasons, dict(state.scalar_memory))
             for parameter, argument in zip(parameters, args):
                 if argument in state.pointers:
                     callee_state = callee_state.with_pointer(parameter, state.pointers[argument])
@@ -740,7 +745,13 @@ class AnalysisEngine:
 
     def _initial_state(self) -> State:
         pointers = {object_id: PointerValue(frozenset({object_id}), Interval.const(0)) for object_id in self._global_objects}
-        return State(pointers=pointers, memory_objects=dict(self._global_objects), string_lengths=dict(self._global_strings))
+        scalar_memory = {(object_id, 0): value for object_id, value in self._global_scalars.items()}
+        return State(
+            pointers=pointers,
+            memory_objects=dict(self._global_objects),
+            string_lengths=dict(self._global_strings),
+            scalar_memory=scalar_memory,
+        )
 
     def _diagnostic(self, code, message, severity, inst, function, block, impact):
         if not self._record_effects:

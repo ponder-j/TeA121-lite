@@ -241,6 +241,9 @@ int main(int argc, char **argv) {
     json::Object item;
     item["id"] = global.getName().str();
     item["size_bytes"] = static_cast<int64_t>(layout.getTypeAllocSize(global.getValueType()).getFixedValue());
+    if (const auto *integer = dyn_cast<ConstantInt>(global.getInitializer())) {
+      item["integer_value"] = static_cast<int64_t>(integer->getSExtValue());
+    }
     if (const auto *string = dyn_cast<ConstantDataArray>(global.getInitializer()); string && string->isString()) {
       StringRef value = string->getAsString();
       size_t length = value.size();

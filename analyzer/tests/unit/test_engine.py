@@ -389,3 +389,26 @@ def test_unknown_call_without_pointer_args_is_nonblocking():
     assert not any(item["code"] == "UNKNOWN_CALL" for item in result.diagnostics)
     assert len(result.alarms) == 1
     assert result.alarms[0]["severity"] == "possible"
+
+
+def test_constant_global_scalar_prunes_dead_unsafe_branch():
+    module = {
+        "schema_version": "1.0.0",
+        "globals": [{"id": "flag", "size_bytes": 4, "integer_value": 1}],
+        "functions": [{"name": "demo", "entry": "entry", "blocks": [
+            {"id": "entry", "instructions": [
+                {"id": "load", "op": "load", "pointer": "flag", "result": "condition", "width": 4},
+            ], "terminator": {"op": "br", "condition": "condition", "true": "safe", "false": "unsafe"}},
+            {"id": "safe", "instructions": [
+                {"id": "b", "op": "alloca", "result": "b", "count": 4, "element_size": 1},
+                {"id": "s", "op": "store", "pointer": "b", "value": 0, "width": 1},
+            ]},
+            {"id": "unsafe", "instructions": [
+                {"id": "u", "op": "alloca", "result": "u", "count": 4, "element_size": 1},
+                {"id": "p", "op": "gep", "result": "p", "base": "u", "index": 4, "element_size": 1},
+                {"id": "oob", "op": "store", "pointer": "p", "value": 0, "width": 1},
+            ]},
+        ]}],
+    }
+    result = AnalysisEngine(module).run()
+    assert result.alarms == []
