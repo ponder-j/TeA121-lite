@@ -412,16 +412,3 @@ def test_constant_global_scalar_prunes_dead_unsafe_branch():
     }
     result = AnalysisEngine(module).run()
     assert result.alarms == []
-
-
-def test_branch_refinement_updates_loaded_memory_origin():
-    from tea121.analysis.solver import _refine_name
-    from tea121.domain import Interval, State
-
-    state = State(
-        integers={"loaded": Interval.top()},
-        scalar_memory={("data", 0): Interval.top()},
-        load_origins={"loaded": ("data", 0)},
-    )
-    refined = _refine_name(state, "loaded", Interval(None, 9))
-    assert refined.get_memory_int("data", 0) == Interval(None, 9)

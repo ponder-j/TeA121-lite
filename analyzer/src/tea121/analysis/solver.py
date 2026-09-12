@@ -47,7 +47,6 @@ class AnalysisOutput:
 class FunctionSummary:
     return_interval: Interval | None = None
     return_pointer: PointerValue | None = None
-    state: State | None = None
 
 
 class AnalysisEngine:
@@ -190,11 +189,11 @@ class AnalysisEngine:
                     value = block["terminator"]["value"]
                     break
             if value is None:
-                summary = FunctionSummary(state=returned)
+                summary = FunctionSummary()
             elif value in returned.pointers:
-                summary = FunctionSummary(return_pointer=returned.pointers[value], state=returned)
+                summary = FunctionSummary(return_pointer=returned.pointers[value])
             else:
-                summary = FunctionSummary(return_interval=returned.get_int(value), state=returned)
+                summary = FunctionSummary(return_interval=returned.get_int(value))
         finally:
             self._record_effects = record_effects
 
@@ -389,9 +388,7 @@ class AnalysisEngine:
             if op == "load" and inst.get("pointer_result") and result:
                 return state.with_pointer(result, PointerValue.unknown())
             if op == "load" and result and not pointer.unknown_base and pointer.offset_bytes.is_singleton and len(pointer.bases) == 1:
-                object_id = next(iter(pointer.bases))
-                offset = pointer.offset_bytes.lower or 0
-                return state.with_int(result, state.get_memory_int(object_id, offset)).with_load_origin(result, object_id, offset)
+                return state.with_int(result, state.get_memory_int(next(iter(pointer.bases)), pointer.offset_bytes.lower or 0))
             if op == "store" and not pointer.unknown_base and pointer.offset_bytes.is_singleton and inst.get("value") is not None:
                 value = state.get_int(inst.get("value"))
                 offset = pointer.offset_bytes.lower or 0
@@ -548,7 +545,7 @@ class AnalysisEngine:
                 return state.with_int(result, Interval.top()) if result else state
             callee = self._functions[name]
             parameters = [str(item) for item in callee.get("parameters", [])]
-            callee_state = State(dict(state.integers), dict(state.pointers), dict(state.memory_objects), dict(state.string_lengths), state.reachable, state.reasons, dict(state.scalar_memory), dict(state.load_origins))
+            callee_state = State(dict(state.integers), dict(state.pointers), dict(state.memory_objects), dict(state.string_lengths), state.reachable, state.reasons, dict(state.scalar_memory))
             for parameter, argument in zip(parameters, args):
                 if argument in state.pointers:
                     callee_state = callee_state.with_pointer(parameter, state.pointers[argument])
@@ -562,7 +559,6 @@ class AnalysisEngine:
             if summary is None or self._record_effects:
                 summary = self._analyze_function(callee, callee_state, call_stack + (name,))
                 self._summaries[key] = summary
-            state = self._merge_callee_effects(state, summary.state)
             if result and summary.return_pointer is not None:
                 return state.with_pointer(result, summary.return_pointer)
             if result:
@@ -764,20 +760,6 @@ class AnalysisEngine:
         self._diagnostic("UNKNOWN_INPUT_SIGNATURE", f"{name} call signature is unsupported", "unknown_effect", inst, function, block, "input destination arguments are unavailable")
         return state
 
-    def _merge_callee_effects(self, caller: State, callee: State | None) -> State:
-        """Copy mutations of caller-owned objects back across a call boundary."""
-        if callee is None or not callee.reachable:
-            return caller
-        scalar_memory = dict(caller.scalar_memory)
-        for key, value in callee.scalar_memory.items():
-            if key in scalar_memory or key[0] in caller.memory_objects:
-                scalar_memory[key] = value
-        string_lengths = dict(caller.string_lengths)
-        for object_id in caller.memory_objects:
-            if object_id in callee.string_lengths:
-                string_lengths[object_id] = callee.string_lengths[object_id]
-        return replace(caller, scalar_memory=scalar_memory, string_lengths=string_lengths)
-
     def _known_string_length(self, state: State, pointer: PointerValue) -> Interval | None:
         if pointer.unknown_base or not pointer.bases:
             return None
@@ -931,11 +913,7 @@ def _refine_name(state: State, name: str, constraint: Interval) -> State:
     refined = state.get_int(name).meet(constraint)
     if refined.bottom:
         return State.unreachable()
-    state = state.with_int(name, refined)
-    origin = state.load_origins.get(name)
-    if origin is not None:
-        state = state.with_memory_int(origin[0], refined, origin[1])
-    return state
+    return state.with_int(name, refined)
 
 
 def _exclude_value(interval: Interval, value: int | None) -> Interval:

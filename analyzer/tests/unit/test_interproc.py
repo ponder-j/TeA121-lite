@@ -49,25 +49,3 @@ def test_global_scalar_memory_is_preserved_across_calls():
         ],
     }
     assert AnalysisEngine(module).run().alarms == []
-
-
-def test_reference_parameter_store_is_visible_to_caller():
-    module = {
-        "schema_version": "1.0.0",
-        "functions": [
-            {"name": "main", "entry": "e", "blocks": [{"id": "e", "instructions": [
-                {"id": "data", "op": "alloca", "result": "data", "count": 4, "element_size": 4},
-                {"id": "call", "op": "call", "callee": "set_value", "args": ["data"]},
-                {"id": "load", "op": "load", "pointer": "data", "result": "index", "width": 4},
-                {"id": "buf", "op": "alloca", "result": "buf", "count": 4, "element_size": 1},
-                {"id": "gep", "op": "gep", "result": "p", "base": "buf", "index": "index", "element_size": 1},
-                {"id": "store", "op": "store", "pointer": "p", "value": 0, "width": 1},
-            ]}]},
-            {"name": "set_value", "parameters": ["ref"], "entry": "e", "blocks": [{"id": "e", "instructions": [
-                {"id": "store", "op": "store", "pointer": "ref", "value": 4, "width": 4},
-            ], "terminator": {"op": "ret"}}]},
-        ],
-    }
-    result = AnalysisEngine(module).run()
-    assert len(result.alarms) == 1
-    assert result.alarms[0]["severity"] == "definite"
