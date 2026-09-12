@@ -357,11 +357,14 @@ class AnalysisEngine:
             base = state.get_pointer(inst.get("base"))
             index = state.get_int(inst.get("index", 0))
             scale = int(inst.get("element_size", 1))
-            offset = base.offset_bytes.add(index.mul(Interval.const(scale)))
-            bound_end = base.bound_end_bytes
-            if bound_end is None and isinstance(inst.get("bound_size"), int):
-                bound_end = offset.add(Interval.const(int(inst["bound_size"])))
-            return state.with_pointer(result, PointerValue(base.bases, offset, base.unknown_base, bound_end))
+            delta = index.mul(Interval.const(scale))
+            offset = base.offset_bytes.add(delta)
+            bound_size = base.bound_size_bytes
+            if bound_size is None and isinstance(inst.get("bound_size"), int):
+                bound_size = Interval.const(int(inst["bound_size"]))
+            elif bound_size is not None:
+                bound_size = bound_size.sub(delta)
+            return state.with_pointer(result, PointerValue(base.bases, offset, base.unknown_base, bound_size))
         if op in {"load", "store"}:
             pointer = state.get_pointer(inst.get("pointer"))
             width = int(inst.get("width", 1))
@@ -494,13 +497,19 @@ class AnalysisEngine:
             offset = pointer.offset_bytes
             limit_lower = obj.size_bytes.lower
             limit_upper = obj.size_bytes.upper
-            if pointer.bound_end_bytes is not None:
-                if pointer.bound_end_bytes.lower is not None:
-                    limit_lower = pointer.bound_end_bytes.lower if limit_lower is None else min(limit_lower, pointer.bound_end_bytes.lower)
-                if pointer.bound_end_bytes.upper is not None:
-                    limit_upper = pointer.bound_end_bytes.upper if limit_upper is None else min(limit_upper, pointer.bound_end_bytes.upper)
-            safe = width is not None and offset.lower is not None and offset.lower >= 0 and offset.upper is not None and limit_lower is not None and offset.upper + width <= limit_lower
+            subobject_size = pointer.bound_size_bytes
+            safe = (
+                width is not None
+                and offset.lower is not None
+                and offset.lower >= 0
+                and offset.upper is not None
+                and limit_lower is not None
+                and offset.upper + width <= limit_lower
+                and (subobject_size is None or (subobject_size.lower is not None and width <= subobject_size.lower))
+            )
             definite = width is not None and offset.lower is not None and limit_upper is not None and (offset.lower < 0 or offset.lower + width > limit_upper)
+            if width is not None and subobject_size is not None and subobject_size.upper is not None:
+                definite = definite or width > subobject_size.upper
             if not safe:
                 alarm_key = f"{function.get('name','')}:{inst.get('id', len(self.output.alarms))}:{object_id}"
                 if alarm_key in self._emitted_alarm_keys:
