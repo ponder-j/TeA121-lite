@@ -88,6 +88,9 @@ TEA121_SUITE=s01,s02 TEA121_FLOW=01 TEA121_LIMIT=20   scripts/docker-evaluate-cw
 Outputs default to `analysis-output/juliet-cwe121-all.json` and `.csv`. The
 CSV keeps the per-case outcome plus diagnostic codes for failure triage.
 
+The tracked evaluation report records the reproducible baseline and the
+iteration history: `docs/juliet-cwe121-evaluation.md`.
+
 ## Supported MiniIR operations
 
 `const`, `add`, `sub`, `mul`, `icmp`, `phi`, `select`, `alloca`, `gep`,
