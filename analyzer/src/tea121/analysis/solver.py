@@ -559,8 +559,22 @@ class AnalysisEngine:
                 return state.with_int(result, Interval.top())
             return state
         if name not in self._library_models.names and name:
+            tracked_pointer_args = [
+                arg for arg in args
+                if isinstance(arg, str)
+                and arg in state.pointers
+                and not state.pointers[arg].is_unknown
+            ]
+            if not tracked_pointer_args:
+                # With no tracked pointer arguments, a scalar/void external
+                # call cannot mutate the stack/global objects modeled by this
+                # analysis. Its result is conservatively Top; if that value is
+                # later used as a pointer, the usual unknown-base diagnostic
+                # still prevents an unsound clean verdict.
+                result = inst.get("result")
+                return state.with_int(result, Interval.top()) if result else state
             objects = dict(state.memory_objects)
-            for arg in args:
+            for arg in tracked_pointer_args:
                 pointer = state.get_pointer(arg)
                 for object_id in pointer.bases:
                     if object_id in objects:

@@ -376,3 +376,16 @@ def test_unsupported_void_instruction_remains_silent_and_non_blocking():
     result = AnalysisEngine(module).run()
     assert result.alarms == []
     assert result.diagnostics == []
+
+
+def test_unknown_call_without_pointer_args_is_nonblocking():
+    module = {"schema_version": "1.0.0", "functions": [{"name": "demo", "entry": "entry", "blocks": [{"id": "entry", "instructions": [
+        {"id": "a", "op": "alloca", "result": "buf", "count": 4, "element_size": 1},
+        {"id": "call", "op": "call", "callee": "external_scalar", "args": [7], "result": "index"},
+        {"id": "p", "op": "gep", "result": "ptr", "base": "buf", "index": "index", "element_size": 1},
+        {"id": "s", "op": "store", "pointer": "ptr", "width": 1},
+    ]}]}]}
+    result = AnalysisEngine(module).run()
+    assert not any(item["code"] == "UNKNOWN_CALL" for item in result.diagnostics)
+    assert len(result.alarms) == 1
+    assert result.alarms[0]["severity"] == "possible"

@@ -41,7 +41,9 @@ class LibraryModelRegistry:
         "strlen", "wcslen", "rand", "atoi", "time", "htons", "inet_addr",
         "socket", "connect", "bind", "listen", "accept", "CLOSE_SOCKET",
         "WSAStartup", "WSACleanup", "MAKEWORD", "exit", "free",
-        "printLine", "printIntLine", "printWLine", "printBytesLine",
+        "printLine", "printIntLine", "printLongLongLine", "printStructLine",
+        "printWLine", "printBytesLine", "__cxa_begin_catch", "_ZSt9terminatev",
+        "_ZdlPv",
     }))
 
     def supports(self, name: str) -> bool:
