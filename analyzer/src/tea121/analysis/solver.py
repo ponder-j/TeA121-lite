@@ -354,7 +354,13 @@ class AnalysisEngine:
             element_size = int(inst.get("element_size", 1))
             size = count.mul(Interval.const(element_size))
             object_id = str(inst.get("object_id", f"{function.get('name','')}/{result}"))
-            obj = MemoryObject(object_id, size, {"function": function.get("name"), "block": block.get("id"), "instruction": inst.get("id"), "element_size": element_size})
+            obj = MemoryObject(object_id, size, {
+                "function": function.get("name"),
+                "block": block.get("id"),
+                "instruction": inst.get("id"),
+                "element_size": element_size,
+                "scalar_element_size": int(inst.get("scalar_element_size", element_size)),
+            })
             self._objects[object_id] = obj
             return state.with_object(obj).with_pointer(result, PointerValue(frozenset({object_id}), Interval.const(0)))
         if op in {"gep", "getelementptr"} and result:
@@ -777,7 +783,8 @@ class AnalysisEngine:
         sizes = []
         for object_id in pointer.bases:
             obj = state.memory_objects.get(object_id) or self._objects.get(object_id)
-            sizes.append(int((obj.allocation_site if obj else {}).get("element_size", 1)))
+            site = obj.allocation_site if obj else {}
+            sizes.append(int(site.get("scalar_element_size", site.get("element_size", 1))))
         return max(sizes) if sizes else 1
 
     def _set_pointer_string_length(self, state: State, pointer: PointerValue, length: Interval) -> State:

@@ -74,6 +74,10 @@ static json::Object instruction(const Instruction &inst, const DataLayout &layou
     out["result"] = out["id"];
     out["count"] = ref(alloca->getArraySize(), names);
     out["element_size"] = static_cast<int64_t>(layout.getTypeAllocSize(alloca->getAllocatedType()).getFixedValue());
+    Type *elementType = alloca->getAllocatedType();
+    if (elementType->isArrayTy()) elementType = elementType->getArrayElementType();
+    if (elementType->isSized())
+      out["scalar_element_size"] = static_cast<int64_t>(layout.getTypeAllocSize(elementType).getFixedValue());
   } else if (const auto *gep = dyn_cast<GetElementPtrInst>(&inst)) {
     out["op"] = "gep";
     out["result"] = out["id"];
