@@ -352,7 +352,11 @@ class AnalysisEngine:
             base = state.get_pointer(inst.get("base"))
             index = state.get_int(inst.get("index", 0))
             scale = int(inst.get("element_size", 1))
-            return state.with_pointer(result, PointerValue(base.bases, base.offset_bytes.add(index.mul(Interval.const(scale))), base.unknown_base))
+            offset = base.offset_bytes.add(index.mul(Interval.const(scale)))
+            bound_end = base.bound_end_bytes
+            if bound_end is None and isinstance(inst.get("bound_size"), int):
+                bound_end = offset.add(Interval.const(int(inst["bound_size"])))
+            return state.with_pointer(result, PointerValue(base.bases, offset, base.unknown_base, bound_end))
         if op in {"load", "store"}:
             pointer = state.get_pointer(inst.get("pointer"))
             width = int(inst.get("width", 1))
@@ -483,8 +487,15 @@ class AnalysisEngine:
                 self._diagnostic("UNKNOWN_OBJECT", "memory object is unavailable", "unknown_effect", inst, function, block, "cannot establish object bounds")
                 continue
             offset = pointer.offset_bytes
-            safe = width is not None and offset.lower is not None and offset.lower >= 0 and offset.upper is not None and obj.size_bytes.lower is not None and offset.upper + width <= obj.size_bytes.lower
-            definite = width is not None and offset.lower is not None and obj.size_bytes.upper is not None and (offset.lower < 0 or offset.lower + width > obj.size_bytes.upper)
+            limit_lower = obj.size_bytes.lower
+            limit_upper = obj.size_bytes.upper
+            if pointer.bound_end_bytes is not None:
+                if pointer.bound_end_bytes.lower is not None:
+                    limit_lower = pointer.bound_end_bytes.lower if limit_lower is None else min(limit_lower, pointer.bound_end_bytes.lower)
+                if pointer.bound_end_bytes.upper is not None:
+                    limit_upper = pointer.bound_end_bytes.upper if limit_upper is None else min(limit_upper, pointer.bound_end_bytes.upper)
+            safe = width is not None and offset.lower is not None and offset.lower >= 0 and offset.upper is not None and limit_lower is not None and offset.upper + width <= limit_lower
+            definite = width is not None and offset.lower is not None and limit_upper is not None and (offset.lower < 0 or offset.lower + width > limit_upper)
             if not safe:
                 alarm_key = f"{function.get('name','')}:{inst.get('id', len(self.output.alarms))}:{object_id}"
                 if alarm_key in self._emitted_alarm_keys:

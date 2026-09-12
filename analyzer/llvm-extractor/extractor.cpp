@@ -86,6 +86,8 @@ static json::Object instruction(const Instruction &inst, const DataLayout &layou
       out["index"] = ref(gep->getOperand(gep->getNumOperands() - 1), names);
       out["element_size"] = static_cast<int64_t>(layout.getTypeAllocSize(gep->getResultElementType()).getFixedValue());
     }
+    if (gep->getResultElementType()->isAggregateType())
+      out["bound_size"] = static_cast<int64_t>(layout.getTypeAllocSize(gep->getResultElementType()).getFixedValue());
   } else if (const auto *load = dyn_cast<LoadInst>(&inst)) {
     out["op"] = "load";
     out["result"] = out["id"];

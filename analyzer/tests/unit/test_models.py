@@ -171,3 +171,27 @@ def test_wmemset_width_is_scaled_to_wide_bytes():
     ]}]}]
     result = AnalysisEngine(unsafe).run()
     assert result.alarms and result.alarms[0]["severity"] == "definite"
+
+
+def test_aggregate_gep_bound_distinguishes_struct_field_from_whole_struct():
+    base = {
+        "schema_version": "1.0.0",
+        "globals": [{"id": "src", "size_bytes": 80}],
+        "functions": [{"name": "copy", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "s", "op": "alloca", "result": "s", "count": 1, "element_size": 80},
+            {"id": "field", "op": "gep", "result": "field", "base": "s", "index": 0, "element_size": 1, "bound_size": 64},
+            {"id": "element", "op": "gep", "result": "element", "base": "field", "index": 0, "element_size": 1},
+            {"id": "c", "op": "call", "callee": "memcpy", "args": ["element", "src", 80]},
+        ]}]}],
+    }
+    bad = AnalysisEngine(base).run()
+    assert bad.alarms and bad.alarms[0]["severity"] == "definite"
+
+    safe = dict(base)
+    safe["functions"] = [{"name": "copy", "entry": "e", "blocks": [{"id": "e", "instructions": [
+        {"id": "s", "op": "alloca", "result": "s", "count": 1, "element_size": 80},
+        {"id": "field", "op": "gep", "result": "field", "base": "s", "index": 0, "element_size": 1, "bound_size": 64},
+        {"id": "element", "op": "gep", "result": "element", "base": "field", "index": 0, "element_size": 1},
+        {"id": "c", "op": "call", "callee": "memcpy", "args": ["element", "src", 64]},
+    ]}]}]
+    assert AnalysisEngine(safe).run().alarms == []

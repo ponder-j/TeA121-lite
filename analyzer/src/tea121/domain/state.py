@@ -133,7 +133,15 @@ class State:
                 offset = left.offset_bytes.narrow(right.offset_bytes)
                 if offset.bottom or not bases:
                     return State.unreachable()
-                pointers[key] = PointerValue(bases, offset, False)
+                if left.bound_end_bytes is None:
+                    bound_end = right.bound_end_bytes
+                elif right.bound_end_bytes is None:
+                    bound_end = left.bound_end_bytes
+                else:
+                    bound_end = left.bound_end_bytes.narrow(right.bound_end_bytes)
+                    if bound_end.bottom:
+                        return State.unreachable()
+                pointers[key] = PointerValue(bases, offset, False, bound_end)
 
         objects = dict(self.memory_objects)
         for key in self.memory_objects.keys() & other.memory_objects.keys():
