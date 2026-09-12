@@ -24,6 +24,7 @@ class State:
     reachable: bool = True
     reasons: tuple[str, ...] = ()
     scalar_memory: dict[tuple[str, int], Interval] = field(default_factory=dict)
+    load_origins: dict[str, tuple[str, int]] = field(default_factory=dict)
 
     @classmethod
     def unreachable(cls) -> "State":
@@ -70,6 +71,11 @@ class State:
         lengths[object_id] = value
         return replace(self, string_lengths=lengths)
 
+    def with_load_origin(self, name: str, object_id: str, offset: int) -> "State":
+        origins = dict(self.load_origins)
+        origins[name] = (object_id, offset)
+        return replace(self, load_origins=origins)
+
     def with_object(self, obj: MemoryObject) -> "State":
         objects = dict(self.memory_objects)
         objects[obj.id] = obj
@@ -96,7 +102,11 @@ class State:
             key: self.scalar_memory.get(key, Interval.top()).join(other.scalar_memory.get(key, Interval.top()))
             for key in self.scalar_memory.keys() | other.scalar_memory.keys()
         }
-        return State(ints, ptrs, objects, strings, True, tuple(dict.fromkeys(self.reasons + other.reasons)), scalar_memory)
+        origins = {
+            name: origin for name, origin in self.load_origins.items()
+            if other.load_origins.get(name) == origin
+        }
+        return State(ints, ptrs, objects, strings, True, tuple(dict.fromkeys(self.reasons + other.reasons)), scalar_memory, origins)
 
     def widen(self, other: "State") -> "State":
         joined = self.join(other)
@@ -165,6 +175,10 @@ class State:
         if any(value.bottom for value in scalar_memory.values()):
             return State.unreachable()
 
+        origins = {
+            name: origin for name, origin in self.load_origins.items()
+            if other.load_origins.get(name) == origin
+        }
         return State(
             ints,
             pointers,
@@ -173,4 +187,5 @@ class State:
             True,
             tuple(dict.fromkeys(self.reasons + other.reasons)),
             scalar_memory,
+            origins,
         )
