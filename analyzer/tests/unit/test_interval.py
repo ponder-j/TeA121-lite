@@ -25,8 +25,8 @@ def test_open_interval_arithmetic_preserves_single_sided_bounds():
     assert Interval(None, 9).mul(Interval.const(-4)) == Interval(-36, None)
 
 
-def test_overflow_loses_precision():
-    assert Interval.const(127).add(Interval.const(1), bits=8, signed=True).is_top
+def test_overflow_returns_full_type_range():
+    assert Interval.const(127).add(Interval.const(1), bits=8, signed=True) == Interval(-128, 127)
 
 
 def test_join_is_commutative_and_top_is_absorbing():

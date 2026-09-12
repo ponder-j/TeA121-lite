@@ -25,6 +25,8 @@ class State:
     reasons: tuple[str, ...] = ()
     scalar_memory: dict[tuple[str, int], Interval] = field(default_factory=dict)
     load_origins: dict[str, tuple[str, int]] = field(default_factory=dict)
+    integer_ops: dict[str, str] = field(default_factory=dict)
+    integer_aliases: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def unreachable(cls) -> "State":
@@ -76,6 +78,16 @@ class State:
         origins[name] = (object_id, offset)
         return replace(self, load_origins=origins)
 
+    def with_integer_op(self, name: str, op: str) -> "State":
+        ops = dict(self.integer_ops)
+        ops[name] = op
+        return replace(self, integer_ops=ops)
+
+    def with_integer_alias(self, name: str, source: str) -> "State":
+        aliases = dict(self.integer_aliases)
+        aliases[name] = source
+        return replace(self, integer_aliases=aliases)
+
     def with_object(self, obj: MemoryObject) -> "State":
         objects = dict(self.memory_objects)
         objects[obj.id] = obj
@@ -106,7 +118,9 @@ class State:
             name: origin for name, origin in self.load_origins.items()
             if other.load_origins.get(name) == origin
         }
-        return State(ints, ptrs, objects, strings, True, tuple(dict.fromkeys(self.reasons + other.reasons)), scalar_memory, origins)
+        ops = {name: op for name, op in self.integer_ops.items() if other.integer_ops.get(name) == op}
+        aliases = {name: source for name, source in self.integer_aliases.items() if other.integer_aliases.get(name) == source}
+        return State(ints, ptrs, objects, strings, True, tuple(dict.fromkeys(self.reasons + other.reasons)), scalar_memory, origins, ops, aliases)
 
     def widen(self, other: "State") -> "State":
         joined = self.join(other)
@@ -179,6 +193,8 @@ class State:
             name: origin for name, origin in self.load_origins.items()
             if other.load_origins.get(name) == origin
         }
+        ops = {name: op for name, op in self.integer_ops.items() if other.integer_ops.get(name) == op}
+        aliases = {name: source for name, source in self.integer_aliases.items() if other.integer_aliases.get(name) == source}
         return State(
             ints,
             pointers,
@@ -188,4 +204,6 @@ class State:
             tuple(dict.fromkeys(self.reasons + other.reasons)),
             scalar_memory,
             origins,
+            ops,
+            aliases,
         )

@@ -26,7 +26,13 @@ def main(argv: list[str] | None = None) -> int:
     analyze.add_argument(
         "--no-integer-overflow",
         action="store_true",
-        help="disable CWE-190 typed-integer overflow detection",
+        help="disable CWE-190/CWE-191 typed-integer checks",
+    )
+    analyze.add_argument(
+        "--integer-signedness",
+        choices=("auto", "signed", "unsigned"),
+        default="auto",
+        help="fallback signedness when LLVM debug type information is unavailable",
     )
     args = parser.parse_args(argv)
     if args.command == "analyze":
@@ -43,8 +49,24 @@ def main(argv: list[str] | None = None) -> int:
             result["diagnostics"] = [{"diagnostic_id": "d-1", "code": "INVALID_INPUT", "severity": "error", "message": str(exc), "impact": "MiniIR could not be loaded", "location": None}]
             result["summary"].update(alarm_count=0, diagnostic_count=1, error_count=1)
             return _emit(result, args)
-        config = AnalysisConfig(mode=args.mode, widen_after=max(1, args.widen_after), narrowing_rounds=max(0, args.narrowing_rounds), check_integer_overflow=not args.no_integer_overflow)
-        result = build_result(AnalysisEngine(module, config).run(), input_path=str(args.input), config={"mode": args.mode, "widen_after": config.widen_after, "narrowing_rounds": config.narrowing_rounds, "check_integer_overflow": config.check_integer_overflow})
+        config = AnalysisConfig(
+            mode=args.mode,
+            widen_after=max(1, args.widen_after),
+            narrowing_rounds=max(0, args.narrowing_rounds),
+            check_integer_overflow=not args.no_integer_overflow,
+            integer_signedness=args.integer_signedness,
+        )
+        result = build_result(
+            AnalysisEngine(module, config).run(),
+            input_path=str(args.input),
+            config={
+                "mode": args.mode,
+                "widen_after": config.widen_after,
+                "narrowing_rounds": config.narrowing_rounds,
+                "check_integer_overflow": config.check_integer_overflow,
+                "integer_signedness": config.integer_signedness,
+            },
+        )
         result["artifacts"] = module.get("_artifacts", [])
         return _emit(result, args)
     return 2

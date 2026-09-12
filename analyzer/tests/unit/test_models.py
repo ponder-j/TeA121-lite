@@ -1,5 +1,5 @@
 from tea121.analysis import LibraryModelRegistry
-from tea121.analysis import AnalysisEngine
+from tea121.analysis import AnalysisConfig, AnalysisEngine
 
 
 def test_library_registry_is_replaceable():
@@ -255,3 +255,17 @@ def test_strlen_on_wide_string_uses_conservative_byte_range():
     }
     result = AnalysisEngine(module).run()
     assert result.block_states[0]["exit_state"]["integers"]["bytes"] == {"lower": 0, "upper": 171, "is_bottom": False}
+
+
+def test_fscanf_char_conversion_is_a_fixed_width_write():
+    module = {
+        "schema_version": "1.0.0",
+        "globals": [{"id": "fmt", "size_bytes": 3, "string_length": 2, "string_value": "%c"}],
+        "functions": [{"name": "read", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "b", "op": "alloca", "result": "b", "count": 1, "element_size": 1},
+            {"id": "r", "op": "call", "callee": "fscanf", "args": ["stdin", "fmt", "b"], "result": "r"},
+        ]}]}],
+    }
+    result = AnalysisEngine(module, AnalysisConfig(integer_signedness="unsigned")).run()
+    assert result.alarms == []
+    assert not any(item["code"] == "UNKNOWN_INPUT_LENGTH" for item in result.diagnostics)

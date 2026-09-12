@@ -425,3 +425,50 @@ def test_branch_refinement_updates_loaded_memory_origin():
     )
     refined = _refine_name(state, "loaded", Interval(None, 9))
     assert refined.get_memory_int("data", 0) == Interval(None, 9)
+
+
+def test_zero_extend_then_narrowing_reports_cwe190_overflow():
+    module = {
+        "schema_version": "1.0.0",
+        "functions": [{"name": "inc", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "raw", "op": "const", "result": "raw", "value": -1},
+            {"id": "wide", "op": "zext", "result": "wide", "value": "raw", "src_bits": 8, "bits": 32},
+            {"id": "inc", "op": "add", "result": "next", "left": "wide", "right": 1, "bits": 32},
+            {"id": "narrow", "op": "trunc", "result": "narrow", "value": "next", "bits": 8},
+        ]}]}],
+    }
+    result = AnalysisEngine(module, AnalysisConfig(integer_signedness="unsigned")).run()
+    assert len(result.alarms) == 1
+    assert result.alarms[0]["cwe_id"] == "CWE-190"
+    assert result.alarms[0]["violation_kind"] == "integer_overflow"
+
+
+def test_narrowing_negative_value_reports_cwe191_underflow():
+    module = {
+        "schema_version": "1.0.0",
+        "functions": [{"name": "dec", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "zero", "op": "const", "result": "zero", "value": 0},
+            {"id": "dec", "op": "sub", "result": "negative", "left": "zero", "right": 1, "bits": 32},
+            {"id": "narrow", "op": "trunc", "result": "narrow", "value": "negative", "bits": 8},
+        ]}]}],
+    }
+    result = AnalysisEngine(module, AnalysisConfig(integer_signedness="unsigned")).run()
+    assert any(
+        alarm["cwe_id"] == "CWE-191" and alarm["violation_kind"] == "integer_underflow"
+        for alarm in result.alarms
+    )
+
+
+def test_unsigned_add_negative_constant_is_decrement_underflow():
+    module = {
+        "schema_version": "1.0.0",
+        "functions": [{"name": "dec", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "zero", "op": "const", "result": "zero", "value": 0},
+            {"id": "dec", "op": "add", "result": "next", "left": "zero", "right": -1, "bits": 32},
+        ]}]}],
+    }
+    result = AnalysisEngine(module, AnalysisConfig(integer_signedness="unsigned")).run()
+    assert any(
+        alarm["cwe_id"] == "CWE-191" and alarm["violation_kind"] == "integer_underflow"
+        for alarm in result.alarms
+    )

@@ -1,6 +1,7 @@
 from .solver import AnalysisConfig, AnalysisEngine
 from .models import (
     CWE_INTEGER_OVERFLOW,
+    CWE_INTEGER_UNDERFLOW,
     CWE_STACK_BOUNDS,
     DETECTOR_ID,
     DETECTOR_VERSION,
@@ -14,6 +15,7 @@ __all__ = [
     "AnalysisConfig",
     "AnalysisEngine",
     "CWE_INTEGER_OVERFLOW",
+    "CWE_INTEGER_UNDERFLOW",
     "CWE_STACK_BOUNDS",
     "DETECTOR_ID",
     "DETECTOR_VERSION",

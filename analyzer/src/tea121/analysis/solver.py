@@ -9,6 +9,7 @@ from typing import Any
 from tea121.domain import Interval, MemoryObject, PointerValue, State
 from .models import (
     CWE_INTEGER_OVERFLOW,
+    CWE_INTEGER_UNDERFLOW,
     CWE_STACK_BOUNDS,
     DETECTOR_ID,
     DETECTOR_VERSION,
@@ -28,6 +29,10 @@ class AnalysisConfig:
     # Report when a fixed-width integer operation provably leaves the range of
     # the variable's type (CWE-190 integer overflow / wraparound).
     check_integer_overflow: bool = True
+    # LLVM integer types are signless. ``unsigned`` is available both for
+    # benchmark harnesses that know the source type and for callers that do
+    # not have DWARF signedness available.
+    integer_signedness: str = "auto"
 
 
 @dataclass
@@ -323,14 +328,36 @@ class AnalysisEngine:
             return state.with_int(result, Interval.const(int(inst.get("value", 0))))
         if op in {"add", "sub", "mul"} and result:
             left, right = state.get_int(inst.get("left")), state.get_int(inst.get("right"))
-            bits, signed = inst.get("bits"), inst.get("signed", True)
+            bits, signed = inst.get("bits"), self._effective_signedness(inst)
+            violation_op = str(op)
+            decrement_by: int | None = None
+            if (
+                not signed
+                and op == "add"
+                and right.is_singleton
+                and right.lower is not None
+                and right.lower < 0
+            ):
+                decrement_by = -right.lower
+            if not signed and isinstance(bits, int) and bits > 0:
+                # ConstantInt uses sign-extended JSON values; reinterpret them
+                # according to the source-level unsigned type before checking.
+                left = _as_unsigned_width(left, bits)
+                right = _as_unsigned_width(right, bits)
             if self.config.check_integer_overflow and isinstance(bits, int) and bits > 0:
                 # Recompute with mathematical integers so an out-of-range
                 # result is still visible before ``_bounded`` degrades it.
-                exact = getattr(left, op)(right)
-                self._check_integer_overflow(inst, exact, bits, signed, function, block, result)
-            value = getattr(left, op)(right, bits=bits, signed=signed)
-            return state.with_int(result, value)
+                if decrement_by is not None:
+                    exact = left.sub(Interval.const(decrement_by))
+                    violation_op = "sub"
+                else:
+                    exact = getattr(left, op)(right)
+                self._check_integer_overflow(inst, exact, bits, signed, function, block, result, operation=violation_op)
+            if decrement_by is not None:
+                value = left.sub(Interval.const(decrement_by), bits=bits, signed=signed)
+            else:
+                value = getattr(left, op)(right, bits=bits, signed=signed)
+            return state.with_int(result, value).with_integer_op(result, str(op))
         if op == "phi" and result:
             value = Interval.bottom_value()
             for incoming in inst.get("incoming", []):
@@ -345,11 +372,42 @@ class AnalysisEngine:
             return state.with_int(result, state.get_int(inst.get("true_value")).join(state.get_int(inst.get("false_value"))))
         if op == "icmp" and result:
             return state.with_int(result, _comparison_interval(inst.get("predicate", "eq"), state.get_int(inst.get("left")), state.get_int(inst.get("right"))))
-        if op == "copy" and result:
+        if op in {"copy", "zext", "sext", "trunc"} and result:
             source = str(inst.get("value"))
             if source in state.pointers:
                 return state.with_pointer(result, state.pointers[source])
-            return state.with_int(result, state.get_int(inst.get("value")))
+            value = state.get_int(inst.get("value"))
+            src_bits = inst.get("src_bits")
+            dest_bits = inst.get("bits")
+            signed = self._effective_signedness(inst)
+            origin_op = state.integer_ops.get(source)
+            if op == "zext" and isinstance(src_bits, int) and src_bits > 0:
+                value = _as_unsigned_width(value, src_bits)
+            elif op == "sext" and isinstance(src_bits, int) and src_bits > 0:
+                value = _as_signed_width(value, src_bits)
+            elif op == "trunc" and isinstance(dest_bits, int) and dest_bits > 0:
+                checked_value = value
+                if self.config.check_integer_overflow:
+                    self._check_value_fits_type(
+                        inst,
+                        checked_value,
+                        dest_bits,
+                        signed,
+                        function,
+                        block,
+                        result,
+                        operation=origin_op,
+                    )
+                value = _truncate_interval(value, dest_bits, signed)
+            state = state.with_int(result, value)
+            if origin_op is not None:
+                state = state.with_integer_op(result, origin_op)
+            if op in {"copy", "zext", "sext"}:
+                state = state.with_integer_alias(result, source)
+            origin = state.load_origins.get(source)
+            if origin is not None:
+                state = state.with_load_origin(result, origin[0], origin[1])
+            return state
         if op == "alloca" and result:
             count = state.get_int(inst.get("count", 1))
             element_size = int(inst.get("element_size", 1))
@@ -384,7 +442,16 @@ class AnalysisEngine:
             # itself is not modelled, so check the stored value against the
             # destination type width at the store.
             if op == "store" and self.config.check_integer_overflow and isinstance(inst.get("width"), int) and inst["width"] > 0:
-                self._check_value_fits_type(inst, state.get_int(inst.get("value")), inst["width"] * 8, inst.get("signed", True), function, block, inst.get("value"))
+                self._check_value_fits_type(
+                    inst,
+                    state.get_int(inst.get("value")),
+                    inst["width"] * 8,
+                    self._effective_signedness(inst),
+                    function,
+                    block,
+                    inst.get("value"),
+                    operation=state.integer_ops.get(str(inst.get("value"))),
+                )
             # Loading a pointer from an external declaration (stdin, socket
             # handles, etc.) does not dereference the pointed-to object yet.
             # Preserve it as an unknown pointer without manufacturing an
@@ -422,20 +489,34 @@ class AnalysisEngine:
             # side to unsupported. Pointer-valued unknown operations remain
             # unresolved and are diagnosed when they are actually dereferenced.
             if result:
-                return state.with_int(result, Interval.top())
+                return state.with_int(result, self._typed_range(inst))
             return state
         return state
 
-    def _check_value_fits_type(self, inst, value, bits, signed, function, block, name):
+    def _typed_range(self, inst: dict[str, Any]) -> Interval:
+        bits = inst.get("bits")
+        if isinstance(bits, int) and bits > 0:
+            return Interval.type_range(bits, self._effective_signedness(inst))
+        return Interval.top()
+
+    def _effective_signedness(self, inst: dict[str, Any]) -> bool:
+        explicit = inst.get("signed")
+        if isinstance(explicit, bool):
+            return explicit
+        if self.config.integer_signedness == "unsigned":
+            return False
+        return True
+
+    def _check_value_fits_type(self, inst, value, bits, signed, function, block, name, *, operation: str | None = None):
         """Check a stored value against the destination type of a ``store``.
 
         This catches conversions that preserve the source range because the
         extractor collapses ``trunc``/``sext`` into ``copy``: the value is
         still abstracted with its wide-type interval when it reaches the store.
         """
-        self._emit_overflow_alarm(inst, value, bits, signed, function, block, name, source="stored value range")
+        self._emit_overflow_alarm(inst, value, bits, signed, function, block, name, source="stored value range", operation=operation)
 
-    def _check_integer_overflow(self, inst, value, bits, signed, function, block, result):
+    def _check_integer_overflow(self, inst, value, bits, signed, function, block, result, *, operation: str | None = None):
         """Emit an alarm when a typed integer value leaves its type range.
 
         ``value`` is the *unbounded* interval of the operation; ``bits`` and
@@ -444,16 +525,19 @@ class AnalysisEngine:
         the representable range of the type, ``offset`` is the computed value
         range, and ``access_size`` is the storage width in bytes.
         """
-        self._emit_overflow_alarm(inst, value, bits, signed, function, block, result, source="computed value range")
+        self._emit_overflow_alarm(inst, value, bits, signed, function, block, result, source="computed value range", operation=operation or inst.get("op"))
 
-    def _emit_overflow_alarm(self, inst, value, bits, signed, function, block, name, *, source):
+    def _emit_overflow_alarm(self, inst, value, bits, signed, function, block, name, *, source, operation: str | None = None):
         if not self._record_effects:
             return
         kind = value.overflow_kind(bits, signed)
         if kind is None:
             return
         type_range = Interval.type_range(bits, signed)
-        alarm_key = f"{function.get('name', '')}:{inst.get('id', '')}:{name}:integer_overflow"
+        violation_direction = _integer_violation_direction(value, type_range, str(operation or inst.get("op", "")))
+        cwe_id = CWE_INTEGER_UNDERFLOW if violation_direction == "underflow" else CWE_INTEGER_OVERFLOW
+        violation_kind = "integer_underflow" if violation_direction == "underflow" else "integer_overflow"
+        alarm_key = f"{function.get('name', '')}:{inst.get('id', '')}:{name}:{violation_kind}"
         if alarm_key in self._emitted_alarm_keys:
             return
         self._emitted_alarm_keys.add(alarm_key)
@@ -462,11 +546,11 @@ class AnalysisEngine:
         below = value.lower is not None and value.lower < type_range.lower
         above = value.upper is not None and value.upper > type_range.upper
         if below and above:
-            direction = "wraps around both type bounds"
+            wording = "wraps around both type bounds"
         elif below:
-            direction = "wraps below the type minimum"
+            wording = "wraps below the type minimum"
         else:
-            direction = "exceeds the type maximum"
+            wording = "exceeds the type maximum"
         self.output.alarms.append(
             {
                 "alarm_key": alarm_key,
@@ -474,9 +558,9 @@ class AnalysisEngine:
                 "detector_version": DETECTOR_VERSION,
                 "rule_pack_id": RULE_PACK_ID,
                 "rule_pack_version": RULE_PACK_VERSION,
-                "cwe_id": CWE_INTEGER_OVERFLOW,
+                "cwe_id": cwe_id,
                 "family": None,
-                "violation_kind": "integer_overflow",
+                "violation_kind": violation_kind,
                 "severity": kind,
                 "function_name": function.get("name", ""),
                 "block_id": block.get("id"),
@@ -488,8 +572,8 @@ class AnalysisEngine:
                 "access_size": width,
                 "safe_condition": f"value.lower >= {type_range.lower} and value.upper <= {type_range.upper}",
                 "reason": [
-                    f"{source} {value} {direction} of the {sign} {bits}-bit type {type_range}",
-                    "every value in the range overflows the type" if kind == "definite" else "part of the range overflows the type",
+                    f"{source} {value} {wording} of the {sign} {bits}-bit type {type_range}",
+                    f"every value in the range {violation_direction}s the type" if kind == "definite" else f"part of the range {violation_direction}s the type",
                 ],
                 "source_location": inst.get("location"),
                 "evidence": {"value_range": _interval_json(value), "type_bits": bits, "type_signed": signed},
@@ -554,7 +638,18 @@ class AnalysisEngine:
                 return state.with_int(result, Interval.top()) if result else state
             callee = self._functions[name]
             parameters = [str(item) for item in callee.get("parameters", [])]
-            callee_state = State(dict(state.integers), dict(state.pointers), dict(state.memory_objects), dict(state.string_lengths), state.reachable, state.reasons, dict(state.scalar_memory), dict(state.load_origins))
+            callee_state = State(
+                dict(state.integers),
+                dict(state.pointers),
+                dict(state.memory_objects),
+                dict(state.string_lengths),
+                state.reachable,
+                state.reasons,
+                dict(state.scalar_memory),
+                dict(state.load_origins),
+                dict(state.integer_ops),
+                dict(state.integer_aliases),
+            )
             for parameter, argument in zip(parameters, args):
                 if argument in state.pointers:
                     callee_state = callee_state.with_pointer(parameter, state.pointers[argument])
@@ -686,7 +781,7 @@ class AnalysisEngine:
                             # allocations cannot be mistaken for safe.
                             return state.with_int(result, Interval(0, (length.lower + 1) * element_size - 1))
                         return state.with_int(result, length)
-                return state.with_int(result, Interval.top())
+                return state.with_int(result, self._typed_range(inst))
             return state
         if name not in self._library_models.names and name:
             tracked_pointer_args = [
@@ -702,7 +797,7 @@ class AnalysisEngine:
                 # later used as a pointer, the usual unknown-base diagnostic
                 # still prevents an unsound clean verdict.
                 result = inst.get("result")
-                return state.with_int(result, Interval.top()) if result else state
+                return state.with_int(result, self._typed_range(inst)) if result else state
             objects = dict(state.memory_objects)
             for arg in tracked_pointer_args:
                 pointer = state.get_pointer(arg)
@@ -754,16 +849,23 @@ class AnalysisEngine:
             else:
                 for index, destination in enumerate(destinations):
                     conversion = conversions[min(index, len(conversions) - 1)]
-                    if conversion in {"s", "[", "c"}:
+                    if conversion in {"s", "["}:
                         self._check_access(inst, state.get_pointer(destination), None, state, function, block, write=True)
                         self._diagnostic("UNKNOWN_INPUT_LENGTH", "fscanf string input is unbounded", "unknown_effect", inst, function, block, "conversion may write an arbitrarily long token")
                     else:
-                        width = {"f": 4, "e": 4, "g": 4, "a": 4, "d": 4, "i": 4, "o": 4, "u": 4, "x": 4, "X": 4}.get(conversion, 4)
                         destination_pointer = state.get_pointer(destination)
+                        element_size = self._known_element_size(state, destination_pointer)
+                        if conversion == "c":
+                            width = max(1, element_size)
+                        else:
+                            width = element_size
+                            if width <= 0:
+                                width = {"f": 4, "e": 4, "g": 4, "a": 4, "d": 4, "i": 4, "o": 4, "u": 4, "x": 4, "X": 4}.get(conversion, 4)
                         self._check_access(inst, destination_pointer, width, state, function, block, write=True)
                         if not destination_pointer.unknown_base and destination_pointer.offset_bytes.is_singleton:
+                            value_range = Interval.type_range(width * 8, self._effective_signedness(inst))
                             for object_id in destination_pointer.bases:
-                                state = state.with_memory_int(object_id, Interval.top(), destination_pointer.offset_bytes.lower or 0)
+                                state = state.with_memory_int(object_id, value_range, destination_pointer.offset_bytes.lower or 0)
             if result:
                 return state.with_int(result, Interval(0, len(destinations)))
             return state
@@ -831,6 +933,73 @@ class AnalysisEngine:
         if not self._record_effects:
             return
         self.output.diagnostics.append({"diagnostic_id": f"d-{len(self.output.diagnostics)+1}", "code": code, "severity": severity, "message": message, "impact": impact, "function_name": function.get("name", ""), "block_id": block.get("id"), "instruction_id": inst.get("id"), "location": inst.get("location")})
+
+
+def _as_signed_width(value: Interval, bits: int) -> Interval:
+    if value.bottom:
+        return value
+    low, high = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+    if value.is_singleton:
+        number = value.lower or 0
+        modulus = 1 << bits
+        number %= modulus
+        if number > high:
+            number -= modulus
+        return Interval.const(number)
+    if value.lower is not None and value.upper is not None and value.lower >= low and value.upper <= high:
+        return value
+    return Interval(low, high)
+
+
+def _truncate_interval(value: Interval, bits: int, signed: bool) -> Interval:
+    if value.bottom:
+        return value
+    if value.is_singleton:
+        modulus = 1 << bits
+        number = (value.lower or 0) % modulus
+        if signed and number >= (1 << (bits - 1)):
+            number -= modulus
+        return Interval.const(number)
+    return Interval.type_range(bits, signed)
+
+
+def _as_unsigned_width(value: Interval, bits: int) -> Interval:
+    """Map a signed-looking bit pattern to its zero-extended unsigned value."""
+    modulus = 1 << bits
+    if value.bottom:
+        return value
+    if value.is_singleton:
+        return Interval.const((value.lower or 0) % modulus)
+    if value.lower is not None and value.upper is not None and value.lower >= 0 and value.upper < modulus:
+        return value
+    return Interval(0, modulus - 1)
+
+
+def _integer_violation_direction(value: Interval, type_range: Interval, op: str) -> str:
+    """Classify an out-of-range fixed-width integer result."""
+    low = type_range.lower
+    high = type_range.upper
+    below = (
+        low is not None
+        and (
+            (value.upper is not None and value.upper < low)
+            or (value.lower is not None and value.lower < low)
+        )
+    )
+    above = (
+        high is not None
+        and (
+            (value.lower is not None and value.lower > high)
+            or (value.upper is not None and value.upper > high)
+        )
+    )
+    if below and not above:
+        return "underflow"
+    if above and not below:
+        return "overflow"
+    if below and above:
+        return "underflow" if op == "sub" else "overflow"
+    return "overflow"
 
 
 def _comparison_interval(predicate: str, left: Interval, right: Interval) -> Interval:
@@ -942,6 +1111,18 @@ def _refine_name(state: State, name: str, constraint: Interval) -> State:
     origin = state.load_origins.get(name)
     if origin is not None:
         state = state.with_memory_int(origin[0], refined, origin[1])
+    source = state.integer_aliases.get(name)
+    seen = {name}
+    while source is not None and source not in seen and source in state.integers:
+        seen.add(source)
+        source_refined = state.get_int(source).meet(constraint)
+        if source_refined.bottom:
+            return State.unreachable()
+        state = state.with_int(source, source_refined)
+        source_origin = state.load_origins.get(source)
+        if source_origin is not None:
+            state = state.with_memory_int(source_origin[0], source_refined, source_origin[1])
+        source = state.integer_aliases.get(source)
     return state
 
 

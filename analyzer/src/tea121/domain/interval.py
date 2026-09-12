@@ -192,7 +192,11 @@ class Interval:
             lower = lo if lower is None else lower
             upper = hi if upper is None else upper
         if (lower is not None and lower < lo) or (upper is not None and upper > hi):
-            return Interval.top()
+            # The mathematical result exceeded the type range. The wrapped
+            # value can be any representable value, but retaining the type
+            # bounds is more precise than Top and remains a sound
+            # over-approximation for downstream narrowing checks.
+            return Interval(lo, hi)
         return Interval(lower, upper)
 
 

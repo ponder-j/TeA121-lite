@@ -136,6 +136,9 @@ static json::Object instruction(const Instruction &inst, const DataLayout &layou
         out["bits"] = static_cast<int64_t>(binary->getType()->getIntegerBitWidth());
     } else {
       out["op"] = "unsupported";
+      out["result"] = out["id"];
+      if (binary->getType()->isIntegerTy())
+        out["bits"] = static_cast<int64_t>(binary->getType()->getIntegerBitWidth());
     }
   } else if (const auto *call = dyn_cast<CallBase>(&inst)) {
     const Value *called = call->getCalledOperand()->stripPointerCasts();
@@ -145,17 +148,37 @@ static json::Object instruction(const Instruction &inst, const DataLayout &layou
       return out;
     }
     out["op"] = "call";
-    if (!call->getType()->isVoidTy()) out["result"] = out["id"];
+    if (!call->getType()->isVoidTy()) {
+      out["result"] = out["id"];
+      if (call->getType()->isIntegerTy())
+        out["bits"] = static_cast<int64_t>(call->getType()->getIntegerBitWidth());
+    }
     out["callee"] = callee;
     json::Array args;
     for (const Use &arg : call->args()) args.push_back(ref(arg.get(), names));
     out["args"] = std::move(args);
   } else if (const auto *cast = dyn_cast<CastInst>(&inst)) {
-    out["op"] = "copy";
     out["result"] = out["id"];
     out["value"] = ref(cast->getOperand(0), names);
+    if (cast->getSrcTy()->isIntegerTy())
+      out["src_bits"] = static_cast<int64_t>(cast->getSrcTy()->getIntegerBitWidth());
+    if (cast->getType()->isIntegerTy())
+      out["bits"] = static_cast<int64_t>(cast->getType()->getIntegerBitWidth());
+    if (isa<ZExtInst>(cast))
+      out["op"] = "zext";
+    else if (isa<SExtInst>(cast))
+      out["op"] = "sext";
+    else if (isa<TruncInst>(cast))
+      out["op"] = "trunc";
+    else
+      out["op"] = "copy";
   } else {
     out["op"] = "unsupported";
+    if (!inst.getType()->isVoidTy()) {
+      out["result"] = out["id"];
+      if (inst.getType()->isIntegerTy())
+        out["bits"] = static_cast<int64_t>(inst.getType()->getIntegerBitWidth());
+    }
   }
   return out;
 }
