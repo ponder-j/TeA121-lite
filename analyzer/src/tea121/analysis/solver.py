@@ -662,10 +662,20 @@ class AnalysisEngine:
             result = inst.get("result")
             if result:
                 if name in {"strlen", "wcslen"} and args:
-                    lengths = [state.string_lengths.get(base) for base in state.get_pointer(args[0]).bases]
+                    pointer = state.get_pointer(args[0])
+                    lengths = [state.string_lengths.get(base) for base in pointer.bases]
                     known = [value for value in lengths if value is not None and value.is_singleton]
                     if known:
-                        return state.with_int(result, known[0])
+                        length = known[0]
+                        element_size = self._known_element_size(state, pointer)
+                        if name == "strlen" and element_size > 1:
+                            # Reinterpreting a wide string as bytes is the
+                            # CWE135 flaw: the first NUL byte can occur
+                            # anywhere in the wide representation. Keep a
+                            # conservative byte-length range so bounded
+                            # allocations cannot be mistaken for safe.
+                            return state.with_int(result, Interval(0, (length.lower + 1) * element_size - 1))
+                        return state.with_int(result, length)
                 return state.with_int(result, Interval.top())
             return state
         if name not in self._library_models.names and name:

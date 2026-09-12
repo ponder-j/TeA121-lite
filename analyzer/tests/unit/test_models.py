@@ -243,3 +243,15 @@ def test_wide_memcpy_initialization_propagates_character_length():
     result = AnalysisEngine(module).run()
     assert result.alarms and result.alarms[0]["severity"] == "definite"
     assert not any(item["code"] == "UNKNOWN_STRING_LENGTH" for item in result.diagnostics)
+
+
+def test_strlen_on_wide_string_uses_conservative_byte_range():
+    module = {
+        "schema_version": "1.0.0",
+        "globals": [{"id": "wide_literal", "size_bytes": 172, "element_size": 4, "string_length": 42}],
+        "functions": [{"name": "mix", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "len", "op": "call", "callee": "strlen", "args": ["wide_literal"], "result": "bytes"},
+        ]}]}],
+    }
+    result = AnalysisEngine(module).run()
+    assert result.block_states[0]["exit_state"]["integers"]["bytes"] == {"lower": 0, "upper": 171, "is_bottom": False}
