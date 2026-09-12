@@ -86,7 +86,12 @@ static json::Object instruction(const Instruction &inst, const DataLayout &layou
       out["index"] = ref(gep->getOperand(gep->getNumOperands() - 1), names);
       out["element_size"] = static_cast<int64_t>(layout.getTypeAllocSize(gep->getResultElementType()).getFixedValue());
     }
-    if (gep->getResultElementType()->isAggregateType())
+    // Array-element GEPs do not define a subobject that is bounded to one
+    // element: the source pointer may legally traverse the entire array.
+    // Aggregate fields (for example ``struct.field``) do define such a
+    // boundary and are required for type-overrun detection.
+    if (gep->getResultElementType()->isAggregateType() &&
+        !gep->getSourceElementType()->isArrayTy())
       out["bound_size"] = static_cast<int64_t>(layout.getTypeAllocSize(gep->getResultElementType()).getFixedValue());
   } else if (const auto *load = dyn_cast<LoadInst>(&inst)) {
     out["op"] = "load";
