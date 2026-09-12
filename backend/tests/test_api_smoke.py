@@ -66,6 +66,35 @@ def test_integer_overflow_alarm_is_imported():
         assert alarm["severity"] == "definite"
 
 
+def test_integer_underflow_alarm_is_imported():
+    with TestClient(app) as client:
+        project = client.post("/api/v1/projects", json={"name": "pytest-underflow"}).json()
+        response = client.post(
+            f"/api/v1/projects/{project['id']}/runs",
+            json={
+                "detector_id": "stack-bounds",
+                "rule_pack_id": "cwe121-core",
+                "config": {
+                    "fixture_path": "analyzer/tests/fixtures/miniir/integer_underflow.json"
+                },
+            },
+        )
+        assert response.status_code == 202
+        run_id = response.json()["id"]
+        for _ in range(30):
+            run = client.get(f"/api/v1/runs/{run_id}").json()
+            if run["status"] not in {"queued", "running"}:
+                break
+            time.sleep(0.05)
+        assert run["status"] == "succeeded"
+        alarms = client.get(f"/api/v1/runs/{run_id}/alarms").json()
+        assert alarms["total"] == 1
+        alarm = alarms["items"][0]
+        assert alarm["cwe_id"] == "CWE-191"
+        assert alarm["violation_kind"] == "integer_underflow"
+        assert alarm["severity"] == "definite"
+
+
 def test_debug_project_edits_source_and_persists_rerun_results():
     with TestClient(app) as client:
         project = client.post(

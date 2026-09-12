@@ -7,8 +7,8 @@ from app.db.models import Detector
 DEFAULT_DETECTOR = {
     "id": "stack-bounds",
     "version": "0.1.0",
-    "name": "Stack bounds + integer overflow detector",
-    "supported_cwes": ["CWE-121", "CWE-190"],
+    "name": "Stack bounds + integer overflow/underflow detector",
+    "supported_cwes": ["CWE-121", "CWE-190", "CWE-191"],
     "enabled": True,
 }
 

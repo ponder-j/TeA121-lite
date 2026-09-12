@@ -8,8 +8,8 @@ DEFAULT_RULE_PACK = {
     "id": "cwe121-core",
     "detector_id": "stack-bounds",
     "version": "0.1.0",
-    "name": "CWE-121 bounds + CWE-190 integer overflow rules",
-    "supported_cwes": ["CWE-121", "CWE-190"],
+    "name": "CWE-121 bounds + CWE-190/CWE-191 integer rules",
+    "supported_cwes": ["CWE-121", "CWE-190", "CWE-191"],
     "supported_families": [
         "CWE129_fgets",
         "CWE129_fscanf",
@@ -29,6 +29,7 @@ DEFAULT_RULE_PACK = {
         "wide_char_length_mismatch",
         "out_of_bounds",
         "integer_overflow",
+        "integer_underflow",
     ],
 }
 
