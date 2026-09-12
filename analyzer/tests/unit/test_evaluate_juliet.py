@@ -44,6 +44,19 @@ def test_outcome_classification_keeps_unknown_as_unsupported():
     assert classify_result({"status": "succeeded", "alarms": [{"severity": "definite"}], "diagnostics": []}) == "alarm"
     assert classify_result({"status": "succeeded", "alarms": [], "diagnostics": [{"severity": "unknown_effect"}]}) == "unsupported"
     assert classify_result({"status": "error", "alarms": [], "diagnostics": []}) == "error"
+    assert classify_result(
+        {"status": "succeeded", "alarms": [{"severity": "definite", "cwe_id": "CWE-190"}], "diagnostics": []},
+        expected_cwe="CWE-191",
+    ) == "clean"
+    assert classify_result(
+        {
+            "status": "succeeded",
+            "alarms": [{"severity": "definite", "cwe_id": "CWE-190", "source_location": {"line": 9}}],
+            "diagnostics": [],
+        },
+        expected_cwe="CWE-190",
+        ignored_alarm_lines=frozenset({9}),
+    ) == "clean"
 
 
 def test_pair_matrix_and_conservative_summary():
@@ -145,3 +158,12 @@ def test_compact_analyzer_result_keeps_evidence_and_drops_bulk():
     assert compact["diagnostics"][0]["code"] == "UNKNOWN_CALL"
     assert compact["truncated"] == {"alarms": 0, "diagnostics": 0}
     assert "cfg" not in compact and "block_states" not in compact and "trace" not in compact
+
+
+def test_batch_suite_discovery_accepts_other_cwe_directories(tmp_path):
+    from evaluate_cwe121 import discover_suites
+
+    cwe = tmp_path / "testcases" / "CWE190_Integer_Overflow"
+    (cwe / "s01").mkdir(parents=True)
+    (cwe / "s02").mkdir()
+    assert [suite.name for suite in discover_suites(tmp_path / "testcases", cwe_dir="CWE190_Integer_Overflow")] == ["s01", "s02"]

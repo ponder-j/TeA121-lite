@@ -1,9 +1,8 @@
-"""Batch-evaluate every Juliet CWE-121 suite under a dataset root.
+"""Batch-evaluate every suite of a Juliet CWE directory.
 
-The legacy ``evaluate_juliet.py`` runner intentionally evaluates one suite
-directory at a time. This wrapper keeps that runner as the single source of
-truth for compilation, extraction, analysis, and pair classification, while
-adding deterministic suite discovery and aggregate TP/FP/FN/TN metrics.
+The original entry point targeted CWE-121 and remains backward compatible.
+Pass ``--cwe-dir`` and ``--expected-cwe`` to evaluate other integer CWEs such
+as CWE190/CWE191 with their arithmetic checks enabled.
 """
 
 from __future__ import annotations
@@ -11,7 +10,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -33,17 +35,21 @@ CWE_DIR = "CWE121_Stack_Based_Buffer_Overflow"
 SUITE_NAME = re.compile(r"^s\d{2}$")
 
 
-def discover_suites(root: Path, selected: Iterable[str] = ()) -> list[Path]:
-    """Return deterministic CWE-121 suite directories.
+def discover_suites(
+    root: Path,
+    selected: Iterable[str] = (),
+    cwe_dir: str = CWE_DIR,
+) -> list[Path]:
+    """Return deterministic suite directories for one Juliet CWE.
 
-    Accepted roots are the Juliet ``testcases`` directory, the CWE-121
-    directory itself, or one concrete ``sNN`` directory.
+    Accepted roots are the Juliet ``testcases`` directory, the CWE directory
+    itself, or one concrete ``sNN`` directory.
     """
     root = root.resolve()
     if root.is_dir() and SUITE_NAME.fullmatch(root.name):
         candidates = [root]
     else:
-        cwe_root = root / CWE_DIR if (root / CWE_DIR).is_dir() else root
+        cwe_root = root / cwe_dir if (root / cwe_dir).is_dir() else root
         candidates = sorted(
             path for path in cwe_root.iterdir()
             if path.is_dir() and SUITE_NAME.fullmatch(path.name)
@@ -57,6 +63,29 @@ def discover_suites(root: Path, selected: Iterable[str] = ()) -> list[Path]:
     if not candidates:
         raise ValueError(f"no sNN suites found under {root}")
     return candidates
+
+
+def detect_unsigned_char(compile_args: tuple[str, ...] = ()) -> bool:
+    """Ask the active C compiler whether plain ``char`` is unsigned."""
+    clang = (
+        os.environ.get("TEA121_CLANG")
+        or shutil.which("clang-15")
+        or shutil.which("clang")
+    )
+    if not clang:
+        return False
+    try:
+        completed = subprocess.run(
+            [clang, *compile_args, "-dM", "-E", "-x", "c", "-"],
+            input="",
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0 and "__CHAR_UNSIGNED__" in completed.stdout
 
 
 def collect_cases(suites: Iterable[Path], flow: str | None = None) -> list[tuple[str, CaseFiles]]:
@@ -203,8 +232,43 @@ def write_csv(path: Path, cases: list[dict[str, Any]]) -> None:
             })
 
 
-def evaluate_case(case: CaseFiles, suite: str, temp_root: Path, include_dirs: tuple[Path, ...], defines: tuple[str, ...], timeout: float, keep_artifacts: bool) -> dict[str, Any]:
-    record = _evaluate_case(case, temp_root, include_dirs, defines, timeout, keep_artifacts, include_raw_result=False)
+def evaluate_case(
+    case: CaseFiles,
+    suite: str,
+    temp_root: Path,
+    include_dirs: tuple[Path, ...],
+    defines: tuple[str, ...],
+    timeout: float,
+    keep_artifacts: bool,
+    check_integer_overflow: bool,
+    expected_cwe: str | None,
+    integer_signedness: str,
+    unsigned_char: bool,
+    ignore_juliet_macros: bool,
+    compile_args: tuple[str, ...],
+) -> dict[str, Any]:
+    record = _evaluate_case(
+        case,
+        temp_root,
+        include_dirs,
+        defines,
+        timeout,
+        keep_artifacts,
+        include_raw_result=False,
+        check_integer_overflow=check_integer_overflow,
+        expected_cwe=expected_cwe,
+        integer_signedness=(
+            "unsigned"
+            if check_integer_overflow
+            and integer_signedness == "auto"
+            and ("__unsigned_int_" in case.case_name or ("__char_" in case.case_name and unsigned_char))
+            else "signed"
+            if check_integer_overflow and integer_signedness == "auto"
+            else integer_signedness
+        ),
+        ignore_juliet_macros=ignore_juliet_macros,
+        compile_args=compile_args,
+    )
     record["suite"] = suite
     return record
 
@@ -215,6 +279,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", type=Path, required=True)
     parser.add_argument("--csv-output", type=Path)
     parser.add_argument("--suite", action="append", default=[], help="restrict to a suite such as s01 (repeatable)")
+    parser.add_argument("--cwe-dir", default=CWE_DIR, help="Juliet CWE directory name under the testcases root")
+    parser.add_argument("--expected-cwe", help="only count alarms for this CWE, e.g. CWE-190")
+    parser.add_argument("--check-integer-overflow", action="store_true", help="enable CWE-190/CWE-191 arithmetic checks")
+    parser.add_argument("--integer-signedness", choices=("auto", "signed", "unsigned"), default="auto")
+    parser.add_argument("--ignore-juliet-macros", action="store_true")
+    parser.add_argument("--compile-arg", action="append", default=[])
     parser.add_argument("--flow", help="only evaluate one flow variant, e.g. 01 or 51")
     parser.add_argument("--limit", type=int, help="evaluate at most N sorted cases across all suites")
     parser.add_argument("--include-dir", type=Path, action="append", default=[])
@@ -226,14 +296,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        suites = discover_suites(args.root, args.suite)
+        suites = discover_suites(args.root, args.suite, args.cwe_dir)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     cases = collect_cases(suites, args.flow)
+    compile_args = tuple(args.compile_arg)
+    unsigned_char = detect_unsigned_char(compile_args)
     if args.limit is not None:
         cases = cases[: max(0, args.limit)]
 
-    run_id = f"juliet-cwe121-{uuid.uuid4().hex}"
+    run_id = f"juliet-{args.cwe_dir.lower()}-{uuid.uuid4().hex}"
     temporary = None
     if args.keep_artifacts:
         temp_root = args.artifact_dir or args.output.with_suffix(".artifacts")
@@ -249,13 +321,41 @@ def main(argv: list[str] | None = None) -> int:
         worker_count = max(1, args.jobs)
         if worker_count == 1:
             evaluated.extend(
-                evaluate_case(case, suite, temp_root, include_dirs, defines, args.timeout, args.keep_artifacts)
+                evaluate_case(
+                    case,
+                    suite,
+                    temp_root,
+                    include_dirs,
+                    defines,
+                    args.timeout,
+                    args.keep_artifacts,
+                    args.check_integer_overflow,
+                    args.expected_cwe,
+                    args.integer_signedness,
+                    unsigned_char,
+                    args.ignore_juliet_macros,
+                    compile_args,
+                )
                 for suite, case in cases
             )
         else:
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 evaluated.extend(executor.map(
-                    lambda item: evaluate_case(item[1], item[0], temp_root, include_dirs, defines, args.timeout, args.keep_artifacts),
+                    lambda item: evaluate_case(
+                        item[1],
+                        item[0],
+                        temp_root,
+                        include_dirs,
+                        defines,
+                        args.timeout,
+                        args.keep_artifacts,
+                        args.check_integer_overflow,
+                        args.expected_cwe,
+                        args.integer_signedness,
+                        unsigned_char,
+                        args.ignore_juliet_macros,
+                        compile_args,
+                    ),
                     cases,
                 ))
     finally:
@@ -265,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     result = {
         "schema_version": "1.0.0",
         "run_id": run_id,
-        "dataset": "Juliet CWE-121 all suites",
+        "dataset": f"Juliet {args.expected_cwe or args.cwe_dir} all suites",
         "root": str(args.root),
         "config": {
             "suites": [suite.name for suite in suites],
@@ -275,6 +375,12 @@ def main(argv: list[str] | None = None) -> int:
             "jobs": max(1, args.jobs),
             "include_dirs": [str(path) for path in include_dirs],
             "defines": list(defines),
+            "expected_cwe": args.expected_cwe,
+            "check_integer_overflow": args.check_integer_overflow,
+            "integer_signedness": args.integer_signedness,
+            "ignore_juliet_macros": args.ignore_juliet_macros,
+            "compile_args": list(compile_args),
+            "unsigned_char": unsigned_char,
             "keep_artifacts": args.keep_artifacts,
             "artifact_dir": str(args.artifact_dir or args.output.with_suffix(".artifacts")) if args.keep_artifacts else None,
         },

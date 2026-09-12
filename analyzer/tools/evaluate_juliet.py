@@ -77,7 +77,12 @@ def discover_cases(root: Path, flow: str | None = None) -> list[CaseFiles]:
     return cases
 
 
-def classify_result(result: dict[str, Any] | None, process_error: bool = False) -> str:
+def classify_result(
+    result: dict[str, Any] | None,
+    process_error: bool = False,
+    expected_cwe: str | None = None,
+    ignored_alarm_lines: frozenset[int] = frozenset(),
+) -> str:
     """Map one analyzer result to alarm/clean/unsupported/error."""
     if process_error or not result:
         return "error"
@@ -88,7 +93,15 @@ def classify_result(result: dict[str, Any] | None, process_error: bool = False) 
     # Unknown effects cannot establish that a side is clean.
     if result.get("status") == "unsupported" or severities & {"unsupported", "unknown_effect"}:
         return "unsupported"
-    return "alarm" if result.get("alarms") else "clean"
+    alarms = result.get("alarms") or []
+    if ignored_alarm_lines:
+        alarms = [
+            item for item in alarms
+            if (item.get("source_location") or item.get("location") or {}).get("line") not in ignored_alarm_lines
+        ]
+    if expected_cwe is not None:
+        alarms = [item for item in alarms if item.get("cwe_id") == expected_cwe]
+    return "alarm" if alarms else "clean"
 
 
 def classify_pair(bad: str, good: str) -> str:
@@ -168,6 +181,11 @@ def analyze_side(
     defines: tuple[str, ...], timeout: float, keep_artifacts: bool,
     input_files: Iterable[Path] | None = None,
     include_raw_result: bool = True,
+    check_integer_overflow: bool = False,
+    expected_cwe: str | None = None,
+    integer_signedness: str | None = None,
+    ignored_alarm_lines: frozenset[int] = frozenset(),
+    compile_args: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Compile, normalize, extract, and analyze one side."""
     sources = tuple(files)
@@ -193,6 +211,7 @@ def analyze_side(
         for index, source in enumerate(sources):
             output = workdir / f"unit-{index}.ll"
             command = [clang, "-S", "-emit-llvm", "-O0", "-Xclang", "-disable-O0-optnone", "-g", f"-D{macro}"]
+            command.extend(compile_args)
             command.extend(f"-D{value}" for value in defines)
             command.extend(f"-I{directory}" for directory in include_dirs)
             command.extend([str(source), "-o", str(output)])
@@ -236,7 +255,11 @@ def analyze_side(
             return metadata
         # The s01 dataset is CWE-121 only; keep the historical verdicts by
         # excluding the CWE-190 check unless a caller opts back in.
-        command = [tea121, "analyze", str(miniir), "--format", "json", "--no-integer-overflow"]
+        command = [tea121, "analyze", str(miniir), "--format", "json"]
+        if not check_integer_overflow:
+            command.append("--no-integer-overflow")
+        if integer_signedness:
+            command.extend(["--integer-signedness", integer_signedness])
         completed, failure = _run(command, timeout)
         metadata["command"].append(command)
         if failure or completed is None or completed.returncode not in {0, 1}:
@@ -248,7 +271,13 @@ def analyze_side(
             metadata.update(outcome="error", code="INVALID_ANALYZER_RESULT", message=str(exc), stdout_tail=completed.stdout[-1000:])
             return metadata
         stored_result = result if include_raw_result else compact_analyzer_result(result)
-        metadata.update(outcome=classify_result(result), analyzer_status=result.get("status"), alarm_count=len(result.get("alarms") or []), diagnostic_count=len(result.get("diagnostics") or []), result=stored_result)
+        metadata.update(
+            outcome=classify_result(result, expected_cwe=expected_cwe, ignored_alarm_lines=ignored_alarm_lines),
+            analyzer_status=result.get("status"),
+            alarm_count=len(result.get("alarms") or []),
+            diagnostic_count=len(result.get("diagnostics") or []),
+            result=stored_result,
+        )
         if keep_artifacts:
             metadata["artifacts"] = {"module": str(miniir), "normalized_ir": str(normalized)}
         return metadata
@@ -308,11 +337,36 @@ def write_csv(path: Path, cases: list[dict[str, Any]]) -> None:
             writer.writerow({"case_name": case["case_name"], "family": case.get("family"), "variant": case.get("variant"), "classification": case["classification"], "bad_outcome": case["bad"]["outcome"], "good_outcome": case["good"]["outcome"], "bad_duration_ms": case["bad"].get("duration_ms"), "good_duration_ms": case["good"].get("duration_ms")})
 
 
-def _evaluate_case(case: CaseFiles, temp_root: Path, include_dirs: tuple[Path, ...], defines: tuple[str, ...], timeout: float, keep_artifacts: bool, include_raw_result: bool = True) -> dict[str, Any]:
+def _evaluate_case(
+    case: CaseFiles,
+    temp_root: Path,
+    include_dirs: tuple[Path, ...],
+    defines: tuple[str, ...],
+    timeout: float,
+    keep_artifacts: bool,
+    include_raw_result: bool = True,
+    check_integer_overflow: bool = False,
+    expected_cwe: str | None = None,
+    integer_signedness: str | None = None,
+    ignore_juliet_macros: bool = False,
+    compile_args: tuple[str, ...] = (),
+) -> dict[str, Any]:
     safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", case.case_name)
     case_dir = temp_root / safe_name
-    bad = analyze_side(case.bad_files, "OMITGOOD", case_dir / "bad", include_dirs, defines, timeout, keep_artifacts, case.files, include_raw_result)
-    good = analyze_side(case.good_files, "OMITBAD", case_dir / "good", include_dirs, defines, timeout, keep_artifacts, case.files, include_raw_result)
+    ignored_alarm_lines: set[int] = set()
+    if ignore_juliet_macros:
+        for source in case.files:
+            if source.suffix.lower() not in SOURCE_SUFFIXES:
+                continue
+            try:
+                for line_no, line in enumerate(source.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                    if "RAND32" in line or "RAND64" in line:
+                        ignored_alarm_lines.add(line_no)
+            except OSError:
+                continue
+    frozen_lines = frozenset(ignored_alarm_lines)
+    bad = analyze_side(case.bad_files, "OMITGOOD", case_dir / "bad", include_dirs, defines, timeout, keep_artifacts, case.files, include_raw_result, check_integer_overflow, expected_cwe, integer_signedness, frozen_lines, compile_args)
+    good = analyze_side(case.good_files, "OMITBAD", case_dir / "good", include_dirs, defines, timeout, keep_artifacts, case.files, include_raw_result, check_integer_overflow, expected_cwe, integer_signedness, frozen_lines, compile_args)
     return {"case_name": case.case_name, "family": case.family, "variant": case.variant, "files": [str(path) for path in case.files], "bad": bad, "good": good, "classification": classify_pair(bad["outcome"], good["outcome"])}
 
 
@@ -329,6 +383,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep-artifacts", action="store_true")
     parser.add_argument("--artifact-dir", type=Path, help="persistent directory for normalized IR and MiniIR artifacts")
     parser.add_argument("--jobs", type=int, default=1, help="parallel case workers (use 18 on the provided 18-core host)")
+    parser.add_argument("--check-integer-overflow", action="store_true", help="enable CWE-190/191 integer arithmetic checks")
+    parser.add_argument("--expected-cwe", help="only count alarms with this CWE when classifying a side")
+    parser.add_argument("--integer-signedness", choices=("auto", "signed", "unsigned"), default="auto")
+    parser.add_argument("--ignore-juliet-macros", action="store_true", help="ignore alarms on source lines invoking RAND32/RAND64")
+    parser.add_argument("--compile-arg", action="append", default=[], help="additional compiler argument (repeatable)")
     args = parser.parse_args(argv)
     cases = discover_cases(args.root, args.flow)
     if args.limit is not None:
@@ -345,12 +404,42 @@ def main(argv: list[str] | None = None) -> int:
     try:
         worker_count = max(1, args.jobs)
         if worker_count == 1:
-            evaluated.extend(_evaluate_case(case, temp_root, tuple(args.include_dir), tuple(args.define), args.timeout, args.keep_artifacts) for case in cases)
+            evaluated.extend(
+                _evaluate_case(
+                    case,
+                    temp_root,
+                    tuple(args.include_dir),
+                    tuple(args.define),
+                    args.timeout,
+                    args.keep_artifacts,
+                    check_integer_overflow=args.check_integer_overflow,
+                    expected_cwe=args.expected_cwe,
+                    integer_signedness=args.integer_signedness,
+                    ignore_juliet_macros=args.ignore_juliet_macros,
+                    compile_args=tuple(args.compile_arg),
+                )
+                for case in cases
+            )
         else:
             # executor.map preserves sorted case order while subprocess work is
             # overlapped. Each case owns a separate artifact directory.
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                evaluated.extend(executor.map(lambda case: _evaluate_case(case, temp_root, tuple(args.include_dir), tuple(args.define), args.timeout, args.keep_artifacts), cases))
+                evaluated.extend(executor.map(
+                    lambda case: _evaluate_case(
+                        case,
+                        temp_root,
+                        tuple(args.include_dir),
+                        tuple(args.define),
+                        args.timeout,
+                        args.keep_artifacts,
+                        check_integer_overflow=args.check_integer_overflow,
+                        expected_cwe=args.expected_cwe,
+                        integer_signedness=args.integer_signedness,
+                        ignore_juliet_macros=args.ignore_juliet_macros,
+                        compile_args=tuple(args.compile_arg),
+                    ),
+                    cases,
+                ))
     finally:
         if temporary is not None:
             temporary.cleanup()
