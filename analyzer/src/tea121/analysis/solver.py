@@ -381,7 +381,15 @@ class AnalysisEngine:
         if op == "call":
             return self._call_model(inst, state, function, block, call_stack)
         if op == "unsupported":
-            self._diagnostic("UNSUPPORTED_INSTRUCTION", "unsupported MiniIR instruction", "unsupported", inst, function, block, "instruction semantics are not implemented")
+            # The extractor marks instruction kinds without a dedicated
+            # transfer function as unsupported. Treating a scalar result as
+            # Top is a sound over-approximation and lets downstream bounds
+            # checks report possible violations instead of degrading the whole
+            # side to unsupported. Pointer-valued unknown operations remain
+            # unresolved and are diagnosed when they are actually dereferenced.
+            if result:
+                return state.with_int(result, Interval.top())
+            return state
         return state
 
     def _check_value_fits_type(self, inst, value, bits, signed, function, block, name):

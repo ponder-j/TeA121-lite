@@ -354,3 +354,25 @@ def test_narrowing_assignment_overflow_is_detected():
     assert alarm["violation_kind"] == "integer_overflow"
     assert alarm["instruction_id"] == "write"
     assert alarm["severity"] == "definite"
+
+
+def test_unsupported_scalar_instruction_is_conservative_top():
+    module = module_with_access("index")
+    module["functions"][0]["blocks"][0]["instructions"].insert(
+        0,
+        {"id": "unknown", "op": "unsupported", "result": "index"},
+    )
+    result = AnalysisEngine(module).run()
+    assert not any(item["code"] == "UNSUPPORTED_INSTRUCTION" for item in result.diagnostics)
+    assert len(result.alarms) == 1
+    assert result.alarms[0]["severity"] == "possible"
+
+
+def test_unsupported_void_instruction_remains_silent_and_non_blocking():
+    module = module_with_access(3)
+    module["functions"][0]["blocks"][0]["instructions"].append(
+        {"id": "fence", "op": "unsupported"}
+    )
+    result = AnalysisEngine(module).run()
+    assert result.alarms == []
+    assert result.diagnostics == []
