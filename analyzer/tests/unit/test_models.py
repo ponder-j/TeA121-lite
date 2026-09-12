@@ -113,3 +113,61 @@ def test_fscanf_integer_format_is_bounded_but_string_format_is_unknown():
     string_module["globals"] = [{"id": "fmt", "size_bytes": 3, "string_length": 2, "string_value": "%s"}]
     string_result = AnalysisEngine(string_module).run()
     assert any(item["code"] == "UNKNOWN_INPUT_LENGTH" for item in string_result.diagnostics)
+
+
+def test_snprintf_count_is_checked_in_bytes():
+    module = {
+        "schema_version": "1.0.0",
+        "functions": [{"name": "format", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "b", "op": "alloca", "result": "b", "count": 50},
+            {"id": "c", "op": "call", "callee": "snprintf", "args": ["b", 100, "fmt", "source"]},
+        ]}]}],
+    }
+    result = AnalysisEngine(module).run()
+    assert result.alarms and result.alarms[0]["severity"] == "definite"
+
+
+def test_swprintf_count_is_scaled_to_wide_bytes():
+    module = {
+        "schema_version": "1.0.0",
+        "functions": [{"name": "format", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "b", "op": "alloca", "result": "b", "count": 50, "element_size": 4},
+            {"id": "c", "op": "call", "callee": "swprintf", "args": ["b", 51, "fmt", "source"]},
+        ]}]}],
+    }
+    result = AnalysisEngine(module).run()
+    assert result.alarms and result.alarms[0]["severity"] == "definite"
+
+
+def test_local_nul_store_enables_wide_string_overflow_check():
+    module = {
+        "schema_version": "1.0.0",
+        "functions": [{"name": "copy", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "src", "op": "alloca", "result": "src", "count": 400, "element_size": 1},
+            {"id": "tail", "op": "gep", "result": "tail", "base": "src", "index": 99, "element_size": 4},
+            {"id": "nul", "op": "store", "pointer": "tail", "value": 0, "width": 4},
+            {"id": "dst", "op": "alloca", "result": "dst", "count": 50, "element_size": 4},
+            {"id": "c", "op": "call", "callee": "wcscpy", "args": ["dst", "src"]},
+        ]}]}],
+    }
+    result = AnalysisEngine(module).run()
+    assert result.alarms and result.alarms[0]["severity"] == "definite"
+    assert not any(item["code"] == "UNKNOWN_STRING_LENGTH" for item in result.diagnostics)
+
+
+def test_wmemset_width_is_scaled_to_wide_bytes():
+    safe = {
+        "schema_version": "1.0.0",
+        "functions": [{"name": "fill", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "b", "op": "alloca", "result": "b", "count": 50, "element_size": 4},
+            {"id": "c", "op": "call", "callee": "wmemset", "args": ["b", 65, 50]},
+        ]}]}],
+    }
+    assert AnalysisEngine(safe).run().alarms == []
+    unsafe = dict(safe)
+    unsafe["functions"] = [{"name": "fill", "entry": "e", "blocks": [{"id": "e", "instructions": [
+        {"id": "b", "op": "alloca", "result": "b", "count": 50, "element_size": 4},
+        {"id": "c", "op": "call", "callee": "wmemset", "args": ["b", 65, 51]},
+    ]}]}]
+    result = AnalysisEngine(unsafe).run()
+    assert result.alarms and result.alarms[0]["severity"] == "definite"

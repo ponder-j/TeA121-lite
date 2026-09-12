@@ -29,7 +29,7 @@ class FunctionModel(Protocol):
 class LibraryModelRegistry:
     """Names known to the solver; model behavior stays replaceable."""
 
-    names: frozenset[str] = field(default_factory=lambda: frozenset({"memcpy", "memmove", "memset", "strcpy", "strncpy"}))
+    names: frozenset[str] = field(default_factory=lambda: frozenset({"memcpy", "memmove", "memset", "wmemset", "strcpy", "strncpy", "strcat", "strncat", "wcscpy", "wcsncpy", "wcscat", "wcsncat", "snprintf", "swprintf"}))
     # Input routines have dedicated conservative transfer functions in the
     # solver. Keeping them separate from ``names`` means the user-facing
     # ``--models`` switch continues to control copy/string models only.

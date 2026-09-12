@@ -65,6 +65,11 @@ class State:
         ptrs[name] = value
         return replace(self, pointers=ptrs)
 
+    def with_string_length(self, object_id: str, value: Interval) -> "State":
+        lengths = dict(self.string_lengths)
+        lengths[object_id] = value
+        return replace(self, string_lengths=lengths)
+
     def with_object(self, obj: MemoryObject) -> "State":
         objects = dict(self.memory_objects)
         objects[obj.id] = obj

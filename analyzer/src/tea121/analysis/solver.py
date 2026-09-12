@@ -345,7 +345,7 @@ class AnalysisEngine:
             element_size = int(inst.get("element_size", 1))
             size = count.mul(Interval.const(element_size))
             object_id = str(inst.get("object_id", f"{function.get('name','')}/{result}"))
-            obj = MemoryObject(object_id, size, {"function": function.get("name"), "block": block.get("id"), "instruction": inst.get("id")})
+            obj = MemoryObject(object_id, size, {"function": function.get("name"), "block": block.get("id"), "instruction": inst.get("id"), "element_size": element_size})
             self._objects[object_id] = obj
             return state.with_object(obj).with_pointer(result, PointerValue(frozenset({object_id}), Interval.const(0)))
         if op in {"gep", "getelementptr"} and result:
@@ -375,8 +375,17 @@ class AnalysisEngine:
                 return state.with_int(result, state.get_memory_int(next(iter(pointer.bases)), pointer.offset_bytes.lower or 0))
             if op == "store" and not pointer.unknown_base and pointer.offset_bytes.is_singleton and inst.get("value") is not None:
                 value = state.get_int(inst.get("value"))
+                offset = pointer.offset_bytes.lower or 0
                 for object_id in pointer.bases:
-                    state = state.with_memory_int(object_id, value, pointer.offset_bytes.lower or 0)
+                    state = state.with_memory_int(object_id, value, offset)
+                    if value.is_singleton and value.lower == 0 and len(pointer.bases) == 1:
+                        obj = state.memory_objects.get(object_id)
+                        allocation_element_size = int((obj.allocation_site if obj else {}).get("element_size", 1))
+                        # The store width identifies the character width even
+                        # when ALLOCA lowered the object as a byte array.
+                        element_size = int(inst.get("width", allocation_element_size)) or allocation_element_size
+                        if offset >= 0 and element_size > 0 and offset % element_size == 0:
+                            state = state.with_string_length(object_id, Interval.const(offset // element_size))
             return state.with_int(result, Interval.top()) if op == "load" and result else state
         if op == "call":
             return self._call_model(inst, state, function, block, call_stack)
@@ -526,23 +535,78 @@ class AnalysisEngine:
             if result:
                 return state.with_int(result, summary.return_interval or Interval.top())
             return state
-        if model_name in {"memcpy", "memmove", "memset", "strncpy"} and len(args) >= 3:
+        if model_name in {"memcpy", "memmove"} and len(args) >= 3:
             dest, length = state.get_pointer(args[0]), state.get_int(args[2])
             self._check_access(inst, dest, length.lower if length.is_singleton else None, state, function, block, write=True)
             if length.is_singleton:
                 return state
             self._diagnostic("UNKNOWN_LENGTH", f"{name} length is not bounded", "unknown_effect", inst, function, block, "copy width is not a known constant")
             return state
-        if name == "strcpy" and len(args) >= 2:
+        if model_name in {"memset", "wmemset"} and len(args) >= 3:
+            dest = state.get_pointer(args[0])
+            value, count = state.get_int(args[1]), state.get_int(args[2])
+            element_size = 4 if model_name == "wmemset" else 1
+            width = count.mul(Interval.const(element_size)) if count.is_singleton else None
+            self._check_access(inst, dest, width.lower if width is not None and width.is_singleton else None, state, function, block, write=True)
+            if not count.is_singleton:
+                self._diagnostic("UNKNOWN_LENGTH", f"{name} length is not bounded", "unknown_effect", inst, function, block, "copy width is not a known constant")
+            elif value.is_singleton and value.lower == 0 and dest.offset_bytes.is_singleton and len(dest.bases) == 1:
+                object_id = next(iter(dest.bases))
+                offset = dest.offset_bytes.lower or 0
+                if offset >= 0 and offset % element_size == 0:
+                    state = state.with_string_length(object_id, Interval.const(offset // element_size))
+            result = inst.get("result")
+            return state.with_pointer(result, dest) if result else state
+        if model_name in {"strcpy", "wcscpy"} and len(args) >= 2:
             dest, source = state.get_pointer(args[0]), state.get_pointer(args[1])
-            lengths = [state.string_lengths.get(base) for base in source.bases]
-            known = [x for x in lengths if x is not None and x.is_singleton]
-            if known:
-                self._check_access(inst, dest, known[0].lower + 1, state, function, block, write=True)
+            element_size = 4 if model_name == "wcscpy" else 1
+            source_length = self._known_string_length(state, source)
+            if source_length is not None:
+                width = source_length.add(Interval.const(1)).mul(Interval.const(element_size))
+                self._check_access(inst, dest, width.lower if width.is_singleton else None, state, function, block, write=True)
+                state = self._set_pointer_string_length(state, dest, source_length)
             else:
                 self._check_access(inst, dest, None, state, function, block, write=True)
-                self._diagnostic("UNKNOWN_STRING_LENGTH", "source string length is unknown", "unknown_effect", inst, function, block, "strcpy writes an unbounded string")
-            return state
+                self._diagnostic("UNKNOWN_STRING_LENGTH", "source string length is unknown", "unknown_effect", inst, function, block, f"{model_name} writes an unbounded string")
+            result = inst.get("result")
+            return state.with_pointer(result, dest) if result else state
+        if model_name in {"strncpy", "wcsncpy"} and len(args) >= 3:
+            dest, source, count = state.get_pointer(args[0]), state.get_pointer(args[1]), state.get_int(args[2])
+            element_size = 4 if model_name == "wcsncpy" else 1
+            width = count.mul(Interval.const(element_size)) if count.is_singleton else None
+            self._check_access(inst, dest, width.lower if width is not None and width.is_singleton else None, state, function, block, write=True)
+            source_length = self._known_string_length(state, source)
+            if count.is_singleton and source_length is not None and source_length.is_singleton:
+                state = self._set_pointer_string_length(state, dest, Interval.const(min(count.lower or 0, source_length.lower or 0)))
+            elif not count.is_singleton:
+                self._diagnostic("UNKNOWN_LENGTH", f"{name} length is not bounded", "unknown_effect", inst, function, block, "copy width is not a known constant")
+            result = inst.get("result")
+            return state.with_pointer(result, dest) if result else state
+        if model_name in {"strcat", "wcscat", "strncat", "wcsncat"} and len(args) >= 2:
+            dest, source = state.get_pointer(args[0]), state.get_pointer(args[1])
+            element_size = 4 if model_name.startswith("wcs") else 1
+            dest_length = self._known_string_length(state, dest)
+            source_length = self._known_string_length(state, source)
+            count = state.get_int(args[2]) if len(args) >= 3 else None
+            if dest_length is not None and source_length is not None and (count is None or count.is_singleton):
+                appended = source_length if count is None else Interval.const(min(source_length.lower or 0, count.lower or 0))
+                width = dest_length.add(appended).add(Interval.const(1)).mul(Interval.const(element_size))
+                self._check_access(inst, dest, width.lower if width.is_singleton else None, state, function, block, write=True)
+                state = self._set_pointer_string_length(state, dest, dest_length.add(appended))
+            else:
+                self._check_access(inst, dest, None, state, function, block, write=True)
+                self._diagnostic("UNKNOWN_STRING_LENGTH", "destination or source string length is unknown", "unknown_effect", inst, function, block, f"{model_name} writes based on an unknown string length")
+            result = inst.get("result")
+            return state.with_pointer(result, dest) if result else state
+        if model_name in {"snprintf", "swprintf"} and len(args) >= 2:
+            dest, count = state.get_pointer(args[0]), state.get_int(args[1])
+            element_size = 4 if model_name == "swprintf" else 1
+            width = count.mul(Interval.const(element_size)) if count.is_singleton else None
+            self._check_access(inst, dest, width.lower if width is not None and width.is_singleton else None, state, function, block, write=True)
+            if not count.is_singleton:
+                self._diagnostic("UNKNOWN_LENGTH", f"{name} length is not bounded", "unknown_effect", inst, function, block, "output width is not a known constant")
+            result = inst.get("result")
+            return state.with_int(result, Interval.top()) if result else state
         if self._library_models.is_input(model_name):
             return self._input_model(inst, state, function, block, model_name)
         if self._library_models.is_pure(name):
@@ -638,6 +702,24 @@ class AnalysisEngine:
                 return state.with_int(result, Interval(0, len(destinations)))
             return state
         self._diagnostic("UNKNOWN_INPUT_SIGNATURE", f"{name} call signature is unsupported", "unknown_effect", inst, function, block, "input destination arguments are unavailable")
+        return state
+
+    def _known_string_length(self, state: State, pointer: PointerValue) -> Interval | None:
+        if pointer.unknown_base or not pointer.bases:
+            return None
+        lengths = [state.string_lengths.get(base) for base in pointer.bases]
+        if any(value is None for value in lengths):
+            return None
+        value = next(iter(lengths))
+        for other in list(lengths)[1:]:
+            value = value.join(other)
+        return value
+
+    def _set_pointer_string_length(self, state: State, pointer: PointerValue, length: Interval) -> State:
+        if pointer.unknown_base:
+            return state
+        for object_id in pointer.bases:
+            state = state.with_string_length(object_id, length)
         return state
 
     def _format_text(self, value: Any) -> str | None:
