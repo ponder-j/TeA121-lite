@@ -210,3 +210,20 @@ def test_juliet_boolean_helpers_return_exact_values():
     assert exit_state["t"] == {"lower": 1, "upper": 1, "is_bottom": False}
     assert exit_state["f"] == {"lower": 0, "upper": 0, "is_bottom": False}
     assert exit_state["m"] == {"lower": 0, "upper": 1, "is_bottom": False}
+
+
+def test_memcpy_from_known_string_propagates_string_length():
+    module = {
+        "schema_version": "1.0.0",
+        "globals": [{"id": "literal", "size_bytes": 11, "string_length": 10}],
+        "functions": [{"name": "copy", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "src", "op": "alloca", "result": "src", "count": 11},
+            {"id": "init", "op": "call", "callee": "memcpy", "args": ["src", "literal", 11]},
+            {"id": "len", "op": "call", "callee": "strlen", "args": ["src"], "result": "len"},
+            {"id": "dst", "op": "alloca", "result": "dst", "count": 10},
+            {"id": "copy", "op": "call", "callee": "strcpy", "args": ["dst", "src"]},
+        ]}]}],
+    }
+    result = AnalysisEngine(module).run()
+    assert result.alarms and result.alarms[0]["severity"] == "definite"
+    assert not any(item["code"] == "UNKNOWN_STRING_LENGTH" for item in result.diagnostics)

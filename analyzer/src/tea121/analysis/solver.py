@@ -561,9 +561,17 @@ class AnalysisEngine:
                 return state.with_int(result, summary.return_interval or Interval.top())
             return state
         if model_name in {"memcpy", "memmove"} and len(args) >= 3:
-            dest, length = state.get_pointer(args[0]), state.get_int(args[2])
+            dest, source = state.get_pointer(args[0]), state.get_pointer(args[1])
+            length = state.get_int(args[2])
             self._check_access(inst, dest, length.lower if length.is_singleton else None, state, function, block, write=True)
             if length.is_singleton:
+                source_length = self._known_string_length(state, source)
+                if (
+                    source_length is not None
+                    and source_length.is_singleton
+                    and length.lower == source_length.lower + 1
+                ):
+                    state = self._set_pointer_string_length(state, dest, source_length)
                 return state
             self._diagnostic("UNKNOWN_LENGTH", f"{name} length is not bounded", "unknown_effect", inst, function, block, "copy width is not a known constant")
             return state
