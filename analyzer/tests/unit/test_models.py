@@ -195,3 +195,18 @@ def test_aggregate_gep_bound_distinguishes_struct_field_from_whole_struct():
         {"id": "c", "op": "call", "callee": "memcpy", "args": ["element", "src", 64]},
     ]}]}]
     assert AnalysisEngine(safe).run().alarms == []
+
+
+def test_juliet_boolean_helpers_return_exact_values():
+    module = {
+        "schema_version": "1.0.0",
+        "functions": [{"name": "demo", "entry": "e", "blocks": [{"id": "e", "instructions": [
+            {"id": "t", "op": "call", "callee": "globalReturnsTrue", "args": [], "result": "t"},
+            {"id": "f", "op": "call", "callee": "globalReturnsFalse", "args": [], "result": "f"},
+            {"id": "m", "op": "call", "callee": "globalReturnsTrueOrFalse", "args": [], "result": "m"},
+        ]}]}],
+    }
+    exit_state = AnalysisEngine(module).run().block_states[0]["exit_state"]["integers"]
+    assert exit_state["t"] == {"lower": 1, "upper": 1, "is_bottom": False}
+    assert exit_state["f"] == {"lower": 0, "upper": 0, "is_bottom": False}
+    assert exit_state["m"] == {"lower": 0, "upper": 1, "is_bottom": False}

@@ -625,6 +625,14 @@ class AnalysisEngine:
             return state.with_int(result, Interval.top()) if result else state
         if self._library_models.is_input(model_name):
             return self._input_model(inst, state, function, block, model_name)
+        if name in {"globalReturnsTrue", "globalReturnsFalse", "globalReturnsTrueOrFalse"}:
+            result = inst.get("result")
+            value = {
+                "globalReturnsTrue": Interval.const(1),
+                "globalReturnsFalse": Interval.const(0),
+                "globalReturnsTrueOrFalse": Interval(0, 1),
+            }[name]
+            return state.with_int(result, value) if result else state
         if self._library_models.is_pure(name):
             # These calls do not write through pointer arguments in the
             # supported model. Scalar results still need to be propagated;
