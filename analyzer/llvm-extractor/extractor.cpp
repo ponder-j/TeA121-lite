@@ -114,6 +114,8 @@ static json::Object instruction(const Instruction &inst, const DataLayout &layou
     out["predicate"] = predicate(icmp->getPredicate());
     out["left"] = ref(icmp->getOperand(0), names);
     out["right"] = ref(icmp->getOperand(1), names);
+    if (icmp->getOperand(0)->getType()->isIntegerTy())
+      out["bits"] = static_cast<int64_t>(icmp->getOperand(0)->getType()->getIntegerBitWidth());
   } else if (const auto *phi = dyn_cast<PHINode>(&inst)) {
     out["op"] = "phi";
     out["result"] = out["id"];
@@ -208,6 +210,8 @@ static json::Object terminator(const BasicBlock &block,
     cmp["predicate"] = predicate(icmp->getPredicate());
     cmp["left"] = ref(icmp->getOperand(0), values);
     cmp["right"] = ref(icmp->getOperand(1), values);
+    if (icmp->getOperand(0)->getType()->isIntegerTy())
+      cmp["bits"] = static_cast<int64_t>(icmp->getOperand(0)->getType()->getIntegerBitWidth());
     out["condition"] = std::move(cmp);
   } else {
     out["condition"] = ref(condition, values);

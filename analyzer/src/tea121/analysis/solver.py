@@ -293,8 +293,12 @@ class AnalysisEngine:
         cmp = state.get_int(condition) if isinstance(condition, (int, str)) else Interval.top()
         # A branch condition can be represented as a comparison result with metadata.
         if isinstance(condition, dict) and condition.get("op") == "icmp":
+            predicate = condition.get("predicate", "eq")
             left, right = state.get_int(condition.get("left")), state.get_int(condition.get("right"))
-            return _refine_cmp(state, condition.get("predicate", "eq"), left, right, truth, condition.get("left"), condition.get("right"))
+            if str(predicate).startswith("u") and isinstance(condition.get("bits"), int):
+                left = _as_unsigned_width(left, condition["bits"])
+                right = _as_unsigned_width(right, condition["bits"])
+            return _refine_cmp(state, predicate, left, right, truth, condition.get("left"), condition.get("right"))
         if isinstance(condition, str) and condition in state.integers:
             return _refine_name(state, condition, cmp.meet(Interval(1, None) if truth else Interval(None, 0)))
         return state
@@ -371,7 +375,13 @@ class AnalysisEngine:
         if op == "select" and result:
             return state.with_int(result, state.get_int(inst.get("true_value")).join(state.get_int(inst.get("false_value"))))
         if op == "icmp" and result:
-            return state.with_int(result, _comparison_interval(inst.get("predicate", "eq"), state.get_int(inst.get("left")), state.get_int(inst.get("right"))))
+            predicate = inst.get("predicate", "eq")
+            left = state.get_int(inst.get("left"))
+            right = state.get_int(inst.get("right"))
+            if str(predicate).startswith("u") and isinstance(inst.get("bits"), int):
+                left = _as_unsigned_width(left, inst["bits"])
+                right = _as_unsigned_width(right, inst["bits"])
+            return state.with_int(result, _comparison_interval(predicate, left, right))
         if op in {"copy", "zext", "sext", "trunc"} and result:
             source = str(inst.get("value"))
             if source in state.pointers:

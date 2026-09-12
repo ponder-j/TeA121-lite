@@ -472,3 +472,21 @@ def test_unsigned_add_negative_constant_is_decrement_underflow():
         alarm["cwe_id"] == "CWE-191" and alarm["violation_kind"] == "integer_underflow"
         for alarm in result.alarms
     )
+
+
+def test_unsigned_comparison_interprets_negative_constant_as_unsigned():
+    module = {
+        "schema_version": "1.0.0",
+        "globals": [],
+        "functions": [{"name": "demo", "entry": "entry", "blocks": [
+            {"id": "entry", "instructions": [
+                {"id": "cmp", "op": "icmp", "result": "condition", "predicate": "ult", "left": -1, "right": 2147483647, "bits": 32},
+            ], "terminator": {"op": "br", "condition": "condition", "true": "unsafe", "false": "exit"}},
+            {"id": "unsafe", "instructions": [
+                {"id": "mul", "op": "mul", "result": "product", "left": -1, "right": 2, "bits": 32},
+            ]},
+            {"id": "exit", "instructions": []},
+        ]}],
+    }
+    result = AnalysisEngine(module, AnalysisConfig(integer_signedness="unsigned")).run()
+    assert result.alarms == []
